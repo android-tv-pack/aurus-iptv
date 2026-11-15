@@ -678,7 +678,15 @@ class MainActivity : Activity() {
         placeSurface()
         if (prefs.blackSwitch) shade.visibility = View.VISIBLE
         val nowSec = System.currentTimeMillis() / 1000
-        p.setMediaSource(source(if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url))
+        // (an address in a form there is no reader for must not take the app down: the channel is said not to play)
+        val src = try { source(if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url) } catch (e: Exception) {
+            Log.w(tag, "#${i + 1} no reader for this kind of address (${e.cause?.javaClass?.simpleName ?: e.javaClass.simpleName})")
+            p.stop()
+            shade.visibility = View.VISIBLE
+            say("This channel is sent in a form the app cannot play.")
+            return
+        }
+        p.setMediaSource(src)
         p.prepare()
         p.playWhenReady = true
     }

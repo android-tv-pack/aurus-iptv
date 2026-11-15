@@ -11,8 +11,8 @@ android {
         applicationId = "app.hermes.channels"
         minSdk = 24
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.9"
+        versionCode = 10
+        versionName = "0.10"
     }
     buildTypes {
         release {
@@ -29,5 +29,9 @@ android {
 dependencies {
     implementation("androidx.media3:media3-exoplayer:1.11.0-beta01")
     implementation("androidx.media3:media3-exoplayer-hls:1.11.0-beta01")
+    // channels that are sent as DASH (.mpd), Smooth Streaming or RTSP: without these the player has no reader for them
+    implementation("androidx.media3:media3-exoplayer-dash:1.11.0-beta01")
+    implementation("androidx.media3:media3-exoplayer-smoothstreaming:1.11.0-beta01")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.11.0-beta01")
     testImplementation("junit:junit:4.13.2")
 }
