@@ -50,6 +50,7 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import app.hermes.channels.core.Guide
 import app.hermes.channels.core.Library
 import app.hermes.channels.core.M3u
+import app.hermes.channels.core.Rate
 import app.hermes.channels.core.Stamp
 import java.io.File
 import java.text.SimpleDateFormat
@@ -413,6 +414,15 @@ class MainActivity : Activity() {
         val p = ExoPlayer.Builder(this, Renderers(this)).setTrackSelector(sel).build()
         p.setVideoSurfaceView(surface)
         p.addListener(listener)
+        // the times of the first pictures tell the channel's rate within half a second
+        p.setVideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
+            val g = playGen
+            if (frameGen != g) { frameGen = g; frameN = 0 }
+            if (frameN < frameTimes.size) {
+                frameTimes[frameN++] = presentationTimeUs
+                if (frameN == frameTimes.size) { val fps = Rate.of(frameTimes.copyOf()); main.post { if (g == playGen) gotRate(fps, "timed") } }
+            }
+        }
         // (DEBUG) which pieces of the stream were fetched, and the times they carry: never their addresses
         p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             override fun onLoadCompleted(t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, l: androidx.media3.exoplayer.source.LoadEventInfo, d: androidx.media3.exoplayer.source.MediaLoadData) {
@@ -436,6 +446,12 @@ class MainActivity : Activity() {
     private var rateAt = 0L
     private var rateFrom = 0
     private var rated = false
+    /** counts the channel changes, so that pictures of the channel before are not taken for this one's */
+    @Volatile private var playGen = 0
+    // (these three are touched on the player's own thread only)
+    private val frameTimes = LongArray(14)
+    private var frameN = 0
+    private var frameGen = -1
     /** pictures a second of the channel that plays, as counted; 0 = not known yet */
     private var channelFps = 0f
 
@@ -466,11 +482,7 @@ class MainActivity : Activity() {
                     if (rateAt == 0L) { if (frames > 0) { rateAt = now; rateFrom = frames } }
                     else if (now - rateAt >= 5500 && frames - rateFrom < 40) { rateAt = now; rateFrom = frames }      // (it had not got going yet)
                     else if (now - rateAt >= 5500) {
-                        rated = true
-                        channelFps = (frames - rateFrom) * 1000f / (now - rateAt)
-                        Log.i(tag, "#${current + 1} ${"%.1f".format(Locale.US, channelFps)} pictures a second")
-                        matchScreen()
-                        page.refresh()
+                        gotRate((frames - rateFrom) * 1000f / (now - rateAt), "counted")
                     }
                 }
             } else rateAt = 0L
@@ -479,29 +491,33 @@ class MainActivity : Activity() {
         }
     }
 
-    /** the screen's rate that suits [fps] pictures a second, or 0 when the screen is best left as it is */
-    private fun rateFor(fps: Float): Float = when {
-        fps in 24.6f..25.6f || fps in 48.5f..51f -> 50f
-        fps in 29f..30.6f || fps in 58f..61f -> 60f
-        else -> 0f
+    /** the channel's rate is known ([how]: declared by the stream, timed from its first pictures, or counted) */
+    private fun gotRate(fps: Float, how: String) {
+        if (rated || fps <= 0f) return
+        rated = true
+        channelFps = fps
+        Log.i(tag, "#${current + 1} ${"%.2f".format(Locale.US, fps)} pictures a second ($how, ${SystemClock.elapsedRealtime() - startedAt} ms in)")
+        // (not while channels are only looked at in the small window: the screen would go dark again and again)
+        if (!browsing) matchScreen()
+        page.refresh()
     }
 
     /** switches the screen to the rate of the channel that plays (same resolution), so that motion is even */
     private fun matchScreen() {
         val lp = window.attributes
         var want = 0
-        val target = if (prefs.matchRate) rateFor(channelFps) else 0f
-        @Suppress("DEPRECATION") val d = windowManager.defaultDisplay
-        val cur = d.mode
-        if (target > 0f && kotlin.math.abs(cur.refreshRate - target) > 0.2f) {
-            // (of 59.94 and 60, the one broadcasts use)
-            val aim = if (target == 60f) 59.94f else target
-            val m = d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight && kotlin.math.abs(it.refreshRate - target) < 0.2f }
-                .minByOrNull { kotlin.math.abs(it.refreshRate - aim) }
-            if (m != null) { want = m.modeId; Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, m.refreshRate)} a second") }
-        } else if (target > 0f) want = cur.modeId
-        // (0 = no wish: when the setting is off, or the channel's rate has no screen rate that suits)
-        if (lp.preferredDisplayModeId != want && (want != 0 || !prefs.matchRate)) { lp.preferredDisplayModeId = want; window.attributes = lp }
+        if (prefs.matchRate) {
+            if (channelFps <= 0f) return
+            @Suppress("DEPRECATION") val d = windowManager.defaultDisplay
+            val cur = d.mode
+            val modes = d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+            val i = Rate.pick(channelFps, FloatArray(modes.size) { modes[it].refreshRate })
+            // a rate the screen has nothing for: it stays as it is
+            if (i < 0) return
+            want = modes[i].modeId
+            if (want != cur.modeId) Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, modes[i].refreshRate)} a second")
+        }
+        if (lp.preferredDisplayModeId != want) { lp.preferredDisplayModeId = want; window.attributes = lp }
     }
 
     private fun screenLine(): String {
@@ -551,6 +567,7 @@ class MainActivity : Activity() {
         firstPicture = false
         formatLine = ""
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
+        playGen++
         startedAt = SystemClock.elapsedRealtime()
         Log.i(tag, "play #${i + 1}" + (if (tunnel) " (hardware sync)" else ""))
         main.removeCallbacks(probe); main.postDelayed(probe, 2000)
@@ -596,6 +613,7 @@ class MainActivity : Activity() {
                     "audio/mp4a-latm" -> "AAC"; "audio/mpeg-L2" -> "MPEG audio"; "audio/mpeg" -> "MP3"; "audio/ac3" -> "Dolby Digital"; "audio/eac3" -> "Dolby Digital Plus"
                     else -> null
                 }
+                if (g.type == C.TRACK_TYPE_VIDEO && f.frameRate > 0f) gotRate(f.frameRate, "declared")
                 if (g.type == C.TRACK_TYPE_VIDEO && f.width > 0) parts += "${f.width} x ${f.height}" + (if (kind != null) "  $kind" else "")
                 else if (g.type == C.TRACK_TYPE_AUDIO && kind != null) parts += kind
             }
@@ -947,6 +965,7 @@ class MainActivity : Activity() {
         backdrop.visibility = View.GONE
         detailsFor = -1
         placeSurface()
+        if (!back) matchScreen()
         if (back && before >= 0) {
             if (current != before) play(before) else { main.removeCallbacks(watched); main.postDelayed(watched, 30_000) }
         }
@@ -1151,7 +1170,7 @@ class MainActivity : Activity() {
                 Page.Row("Read the guide again", "Also fetches the playlist again", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) }
             )),
             Page.Tab("Playback", "Picture and sound are kept in step the standard way, where you can move the sound yourself, or by the box's own video hardware. " +
-                "A channel whose picture stops with the hardware is played the standard way by itself. When the screen follows the channel, it goes dark for a moment as it changes.",
+                "A channel whose picture stops with the hardware is played the standard way by itself. With the refresh rate on Auto, the screen goes dark for a moment when it changes.",
                 stats = {
                     listOf("THIS CHANNEL" to formatLine.ifEmpty { "\u2014" } + (if (channelFps > 0f) "\n" + Math.round(channelFps) + " pictures a second" else ""),
                         "SCREEN" to screenLine(),
@@ -1168,7 +1187,7 @@ class MainActivity : Activity() {
                     prefs.soundDelay = prefs.soundDelay + 20 * d
                     delayUs = prefs.soundDelay * 1000L
                 },
-                Page.Row("Screen follows the channel", "For even motion the TV is switched to 50 or 60 a second", { if (prefs.matchRate) "On" else "Off" }) {
+                Page.Row("Refresh rate", "Auto: the TV is switched to the channel's rate, for even motion", { if (prefs.matchRate) "Auto" else "Off" }) {
                     prefs.matchRate = !prefs.matchRate
                     matchScreen()
                 },
