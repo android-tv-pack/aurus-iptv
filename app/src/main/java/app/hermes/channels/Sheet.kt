@@ -27,6 +27,10 @@ class Sheet(private val ui: Ui, private val title: String, private val message: 
     private val items = ArrayList<Item>()
     private val buttons = ArrayList<Button>()
     private var field: EditText? = null
+    private var picture = 0
+
+    /** a picture under the words (a code to scan with a phone) */
+    fun picture(res: Int): Sheet { picture = res; return this }
 
     fun item(label: String, value: (() -> String)? = null, act: () -> Unit): Sheet { items += Item(label, value, act); return this }
 
@@ -65,6 +69,11 @@ class Sheet(private val ui: Ui, private val title: String, private val message: 
             card.addView(ui.label(12f, ui.white(170), lines = 12).apply { text = it; setLineSpacing(ui.u(3).toFloat(), 1f) },
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(8) })
         }
+        if (picture != 0) card.addView(android.widget.ImageView(a).apply {
+            setImageResource(picture)
+            background = ui.rounded(Color.WHITE, ui.u(10))
+            clipToOutline = true
+        }, LinearLayout.LayoutParams(ui.u(150), ui.u(150)).apply { topMargin = ui.u(14); gravity = Gravity.CENTER_HORIZONTAL })
         var first: View? = null
         field?.let { e ->
             fun paint(has: Boolean) { e.background = ui.rounded(ui.white(if (has) 30 else 14), ui.u(11), ui.u(if (has) 2 else 1), if (has) ui.accent else ui.white(40)) }
