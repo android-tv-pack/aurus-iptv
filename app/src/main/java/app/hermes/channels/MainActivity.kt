@@ -646,6 +646,10 @@ class MainActivity : Activity() {
     private var waitSince = 0L
     private var goodSince = 0L
     private var gaveUp = false
+    /** a channel that was given up is tried again every 20 s for as long as it is on, so that it plays once its server does */
+    private var laterPending = false
+    private val tryLater = Runnable { laterPending = false; if (current >= 0 && player != null) { Log.i(tag, "#${current + 1} trying the channel again"); play(current, true, browsing) } }
+    private fun later() { if (!laterPending) { laterPending = true; main.postDelayed(tryLater, 20_000) } }
     private var stuck = 0
     private var rateAt = 0L
     private var rateFrom = 0
@@ -687,7 +691,8 @@ class MainActivity : Activity() {
                         play(current, true, browsing)
                         return
                     }
-                    if (!gaveUp) { gaveUp = true; Log.w(tag, "#${current + 1} the server does not deliver"); say("This channel's server is not delivering right now.\nIt may play again in a while.") }
+                    if (!gaveUp) { gaveUp = true; Log.w(tag, "#${current + 1} the server does not deliver"); say("This channel's server is not delivering right now.\nThe app keeps trying.") }
+                    later()
                 }
             } else {
                 waitSince = 0L
@@ -819,6 +824,7 @@ class MainActivity : Activity() {
         formatLine = ""
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
         waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) gaveUp = false
+        main.removeCallbacks(tryLater); laterPending = false
         playGen++
         startedAt = SystemClock.elapsedRealtime()
         Log.i(tag, "play #${i + 1}" + (if (tunnel) " (hardware sync)" else "") + (if (from > 0L) " (recording, ${(System.currentTimeMillis() - from) / 60000} min back)" else "") +
@@ -926,7 +932,8 @@ class MainActivity : Activity() {
             }
             // (the last picture of the channel before would stay under the words)
             shade.visibility = View.VISIBLE
-            say(if (shiftAt > 0L) "This channel has no recording of that time.\nBack returns to what is on now." else "This channel does not play right now.")
+            say(if (shiftAt > 0L) "This channel has no recording of that time.\nBack returns to what is on now." else if (net) "This channel's server is not delivering right now.\nThe app keeps trying." else "This channel does not play right now.")
+            if (net && shiftAt == 0L) later()
         }
     }
 
@@ -2033,7 +2040,7 @@ class MainActivity : Activity() {
     }
 
     /** the settings are drawn again (the playlists listed in them changed) */
-    private fun reopenSettings() { if (page.isOpen) { page.close(); openSettings() } }
+    private fun reopenSettings() { if (page.isOpen) { page.close(); page.keepRow = true; openSettings() } }
 
     /** OK on a playlist in the settings: what can be done with it */
     private fun playlistSheet(id: Int) {
@@ -2104,8 +2111,7 @@ class MainActivity : Activity() {
                         "STATUS" to Repo.guideNote.ifEmpty { if (Repo.guideTime(this) > 0) "Ready" else if (Repo.working) "Reading the EPG" else "Not read yet" },
                         "CHANNELS WITH EPG" to (if (l == null) "\u2014" else num(Repo.covered) + " of " + num(l.channels.size)),
                         "CHANNELS WITH A LOGO" to (if (l == null) "\u2014" else num(l.channels.indices.count { Repo.logo(it).isNotEmpty() })),
-                        "LAST READ" to stamp(Repo.guideTime(this)),
-                        "FROM" to (Uri.parse(Repo.guideLink).host ?: "\u2014"))
+                        "LAST READ" to stamp(Repo.guideTime(this)) + (Uri.parse(Repo.guideLink).host?.let { ", from $it" } ?: ""))
                 }, rows = listOf(
                     Page.Row("EPG of this playlist", "Where \u201C" + prefs.sourceName + "\u201D takes its programmes from", { epgName(prefs.epgOf(prefs.source)) }, { prefs.sources.isNotEmpty() }, steps = false) { epgPicker(prefs.source) }
                 ) + prefs.epgs.map { (id, name, link) ->

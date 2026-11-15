@@ -177,22 +177,26 @@ object Repo {
         if (g != gen) return
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
         val l = lib ?: return
-        if (guideUrl.isEmpty()) { if (g == gen) guideNote = "No guide link"; index(app, l, s, g); main.post { if (g == gen) changed() }; return }
+        if (guideUrl.isEmpty()) { if (g == gen) guideNote = "No EPG link"; index(app, l, s, g); main.post { if (g == gen) changed() }; return }
         val cf = chanFile(app, s); val pf = progFile(app, s)
         if (cf.exists() && pf.exists()) { index(app, l, s, g); loadSoon(app, s, g); main.post { if (g == gen) changed() } }
         val qf = pastFile(app, s)
         val pastMs = recDays.coerceAtMost(7) * 86_400_000L
         if (force || !cf.exists() || !pf.exists() || (pastMs > 0 && !qf.exists()) || System.currentTimeMillis() - pf.lastModified() > FRESH_MS) {
-            if (g == gen) guideNote = "Reading the guide"
+            if (g == gen) guideNote = "Reading the EPG"
             File(app.filesDir, "guide.tsv").delete()            // (the file of an earlier version, without descriptions)
             main.post { if (g == gen) changed() }
-            val tc = File(app.filesDir, "guide-channels${tail(s)}.tmp"); val tp = File(app.filesDir, "guide${tail(s)}.tmp"); val tq = File(app.filesDir, "guide-past${tail(s)}.tmp")
+            // (each reading has files of its own: one that was overtaken by a newer choice of EPG must not write into the newer one's)
+            val tc = File(app.filesDir, "guide-channels${tail(s)}.$g.tmp"); val tp = File(app.filesDir, "guide${tail(s)}.$g.tmp"); val tq = File(app.filesDir, "guide-past${tail(s)}.$g.tmp")
             try {
                 val t0 = SystemClock.elapsedRealtime()
                 val now = System.currentTimeMillis()
                 var chans = 0; var progs = 0
                 val raw = fetch(guideUrl)
-                val input = if (guideUrl.substringBefore('?').endsWith(".gz", true)) GZIPInputStream(raw, 1 shl 16) else raw
+                // (packed or not: told from the first two bytes, since a link need not end in .gz and may lead on to another)
+                val head = java.io.BufferedInputStream(raw, 1 shl 16)
+                head.mark(2); val b0 = head.read(); val b1 = head.read(); head.reset()
+                val input: InputStream = if (b0 == 0x1f && b1 == 0x8b) GZIPInputStream(head, 1 shl 16) else head
                 tc.bufferedWriter().use { wc ->
                     tq.bufferedWriter().use { wq ->
                     tp.bufferedWriter().use { wp ->
@@ -206,19 +210,20 @@ object Repo {
                         })
                         input.use { s ->
                             val buf = ByteArray(1 shl 16)
-                            while (true) { val n = s.read(buf); if (n < 0) break; scan.feed(buf, n) }
+                            while (true) { if (g != gen) throw java.io.IOException("overtaken"); val n = s.read(buf); if (n < 0) break; scan.feed(buf, n) }
                         }
                     }
                     }
                 }
                 if (chans == 0) throw java.io.IOException("no channels")
+                if (g != gen) throw java.io.IOException("overtaken")
                 tc.renameTo(cf); tp.renameTo(pf); tq.renameTo(qf)
                 Log.i(TAG, "guide: $chans channels, $progs programmes, ${(SystemClock.elapsedRealtime() - t0) / 1000} s")
                 if (g == gen) guideNote = ""
                 index(app, l, s, g); loadSoon(app, s, g)
             } catch (e: Exception) {
                 tc.delete(); tp.delete(); tq.delete()
-                if (g == gen) guideNote = if (cf.exists()) "" else "Could not read the guide"
+                if (g == gen) guideNote = if (cf.exists()) "" else "Could not read the EPG"
                 Log.w(TAG, "guide failed: ${e.javaClass.simpleName}")
             }
             main.post { if (g == gen) changed() }

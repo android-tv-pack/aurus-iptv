@@ -30,6 +30,9 @@ class Page(private val ui: Ui, private val host: FrameLayout, private val title:
     private var refreshAll: (() -> Unit)? = null
     private var refocus: (() -> Unit)? = null
     private var last = 0
+    private var lastRow = 0
+    /** set before [open]: the focus goes to the row it was on when the page was closed */
+    var keepRow = false
     val isOpen: Boolean get() = view != null
 
     fun refresh() { refreshAll?.invoke() }
@@ -121,7 +124,7 @@ class Page(private val ui: Ui, private val host: FrameLayout, private val title:
                 line.setOnFocusChangeListener { v, has ->
                     v.background = if (has) ui.rounded(ui.white(40), ui.u(11), ui.u(2), ui.accent) else ui.rounded(ui.white(10), ui.u(11))
                     value.setTextColor(if (has) ui.accent else ui.white(210))
-                    if (has) focused = v
+                    if (has) { focused = v; lastRow = rowViews.indexOfFirst { it.second === v } }
                 }
                 line.setOnClickListener { r.act(1); refresh() }
                 line.setOnKeyListener { v, kc, ev ->
@@ -171,7 +174,10 @@ class Page(private val ui: Ui, private val host: FrameLayout, private val title:
         refocus = { (focused ?: visibleRows().firstOrNull() ?: tabViews[cur]).requestFocus() }
         host.addView(p, ViewGroup.LayoutParams(-1, -1))
         view = p
+        val row = if (keepRow) lastRow else -1
+        keepRow = false
         show(cur)
+        if (row >= 0) focused = rowViews.getOrNull(row)?.second?.takeIf { it.visibility == View.VISIBLE }
         focus()
     }
 
