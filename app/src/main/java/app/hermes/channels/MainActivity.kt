@@ -65,8 +65,8 @@ import java.util.Locale
  * The whole app is this one screen: the channel plays full-screen, and everything else comes over it.
  *
  *  - Up / Down (or CH+ / CH-): the next / previous channel of the list that was chosen last
- *  - OK or Left: the channels. Lists on the left, the channels beside them; the channel under the focus plays in a
- *    small window on the right, with what it shows now (and what that is about) and later below it.
+ *  - OK or Left: the channels. Lists on the left, the channels beside them; the channel that is watched (or, if set so,
+ *    the one under the focus) plays in a small window on the right, with what it shows now (and what that is about) and later below it.
  *    OK watches it full-screen, Back returns to the channel that was on. Holding OK makes a favourite.
  *  - Right: the programmes of the channel that plays
  *  - hold OK: the bar with pause, start over, sound, subtitles and picture size; Left / Right choose one, OK steps it
@@ -1187,6 +1187,7 @@ class MainActivity : Activity() {
     private lateinit var dStop: TextView
     private lateinit var dLeft: TextView
     private lateinit var headList: TextView
+    private lateinit var miniTag: TextView
     private lateinit var headClock: TextView
     /** how many channels each list of the left column has */
     private var groupCounts: Map<String, Int> = emptyMap()
@@ -1357,6 +1358,13 @@ class MainActivity : Activity() {
                 c.drawRoundRect(in2, in2, w - in2, h - in2, r, r, edge)
             }
         }, FrameLayout.LayoutParams(-1, miniH))
+        // which channel the small window shows, when that is not the one the focus is on
+        miniTag = ui.label(9.5f, Color.WHITE, true).apply {
+            letterSpacing = 0.06f
+            background = ui.rounded(Color.argb(170, 6, 9, 18), u(9))
+            setPadding(u(9), u(3.5f), u(9), u(4))
+        }
+        right.addView(miniTag, FrameLayout.LayoutParams(-2, -2).apply { leftMargin = u(10); topMargin = miniH - u(30); rightMargin = u(10) })
         val about = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         dLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; background = ui.rounded(white(14), u(8)); setPadding(u(3), u(3), u(3), u(3)) }
@@ -1519,6 +1527,8 @@ class MainActivity : Activity() {
         groupRows = groupsNow()
         backdrop.visibility = View.VISIBLE
         browsePage.visibility = View.VISIBLE
+        miniTag.visibility = if (prefs.previewFocus) View.GONE else View.VISIBLE
+        miniTag.text = "WATCHING   " + (current + 1) + "  " + l.channels[current.coerceIn(0, l.channels.size - 1)].name
         clockTick.run()
         placeSurface()
         val name = if (groupRows.any { it.first == scopeName } && current in l.list(scopeName, favs, recents)) scopeName else Library.ALL
@@ -1548,7 +1558,8 @@ class MainActivity : Activity() {
     private fun look(i: Int) {
         fillDetails(i)
         main.removeCallbacks(lookLater)
-        main.postDelayed(lookLater, 600)
+        // (unless the small window is to stay on the channel that is watched)
+        if (prefs.previewFocus) main.postDelayed(lookLater, 600)
     }
 
     private val lookLater = Runnable {
@@ -1974,6 +1985,9 @@ class MainActivity : Activity() {
                 },
                 Page.Row("While a channel changes", "What is seen until the new channel's picture comes", { if (prefs.blackSwitch) "Black screen" else "Last picture" }) {
                     prefs.blackSwitch = !prefs.blackSwitch
+                },
+                Page.Row("Small window in the channel list", "What plays there while you move through the channels", { if (prefs.previewFocus) "The channel in focus" else "The channel you watch" }) {
+                    prefs.previewFocus = !prefs.previewFocus
                 },
                 Page.Row("See-through bars", "How much of the picture shows through the bar and the programme list", { "${prefs.glass} %" }) { d ->
                     prefs.glass = prefs.glass + 10 * d

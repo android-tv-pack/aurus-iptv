@@ -126,5 +126,8 @@ class Prefs(ctx: Context) {
     /** after a pause the channel goes on this many seconds earlier (0, 5 or 10) */
     var resumeBack: Int get() = p.getInt("resumeBack", 5).coerceIn(0, 10); set(v) { p.edit().putInt("resumeBack", v.coerceIn(0, 10)).apply() }
 
+    /** in the channel list the small window plays the channel under the focus (false: it stays on the channel that is watched) */
+    var previewFocus: Boolean get() = flag("previewFocus", false); set(v) = put("previewFocus", v)
+
     var homeChannel: Long get() = p.getLong("homeChannel", 0L); set(v) { p.edit().putLong("homeChannel", v).apply() }
 }
