@@ -8,6 +8,16 @@ A fast, ad-free player for your own IPTV playlist on Android TV and Google TV bo
 
 Aurus IPTV brings **no channels of its own**. It has no adverts, no account and no tracking, and your playlist link stays on the device. It is part of [Android TV Pack](https://github.com/android-tv-pack), next to the [Aurora launcher](https://github.com/android-tv-pack/aurora-launcher).
 
+## Screenshots
+
+| Watching | Channel list |
+|---|---|
+| ![Watching a channel, with the programme bar](docs/screenshots/watching.jpg) | ![The channel list with a small window and the programme guide](docs/screenshots/channels.jpg) |
+| **Options while watching (hold OK)** | **Settings** |
+| ![Sound, subtitles, picture, lip sync and sleep timer](docs/screenshots/options.jpg) | ![Playback settings](docs/screenshots/settings.jpg) |
+
+The pictures show a demonstration playlist of open films (Big Buck Bunny and Tears of Steel, © Blender Foundation, CC BY). The app itself brings no channels.
+
 ## Install
 
 1. Download **Aurus-IPTV-beta.apk** from the newest entry on the [releases page](https://github.com/android-tv-pack/aurus-iptv/releases).
