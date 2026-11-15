@@ -24,7 +24,14 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import android.net.Uri
+import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import java.io.File
@@ -94,16 +101,13 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
-        val p = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultHttpDataSource.Factory()
-                .setUserAgent("Mozilla/5.0 (Linux; Android) Channels")
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(10000).setReadTimeoutMs(15000)))
-            .build()
+        val p = ExoPlayer.Builder(this).build()
         p.setVideoSurfaceView(surface)
         p.addListener(listener)
         player = p
         // (for testing) am start ... --es test <address of a stream>
+        // (for testing) --ei index N starts on the channel with that number in the list
+        if (intent.hasExtra("index")) { index = intent.getIntExtra("index", 1) - 1; intent.removeExtra("index") }
         val test = intent.getStringExtra("test")
         if (test != null) {
             channels = listOf(M3u.Channel("Test stream", "", test, "", ""))
@@ -165,9 +169,42 @@ class MainActivity : Activity() {
         }, "channels-list").start()
     }
 
-    private fun play() {
+    private val http by lazy {
+        DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Linux; Android) Channels")
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(10000).setReadTimeoutMs(15000)
+    }
+    // broadcast feeds often have no "IDR" pictures at all: without this their picture never starts
+    private val tsFlags = DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+
+    private fun source(address: String): MediaSource {
+        val item = MediaItem.fromUri(address)
+        return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
+            HlsMediaSource.Factory(http).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+        else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).createMediaSource(item)
+    }
+
+    private var retries = 0
+
+    /** (adb shell setprop log.tag.Channels DEBUG) what the player is doing, every two seconds */
+    private val probe = object : Runnable {
+        override fun run() {
+            val p = player ?: return
+            if (Log.isLoggable(tag, Log.DEBUG)) {
+                val v = p.videoDecoderCounters; val a = p.audioDecoderCounters
+                Log.d(tag, "#${index + 1} state=${p.playbackState} loading=${p.isLoading} buffered=${p.totalBufferedDuration}ms pos=${p.currentPosition} " +
+                    "video[${p.videoFormat?.let { "${it.width}x${it.height} fr=${it.frameRate}" }} in=${v?.queuedInputBufferCount} out=${v?.renderedOutputBufferCount} drop=${v?.droppedBufferCount} skip=${v?.skippedOutputBufferCount} init=${v?.decoderInitCount}] " +
+                    "audio[in=${a?.queuedInputBufferCount} out=${a?.renderedOutputBufferCount}]")
+            }
+            main.postDelayed(this, 2000)
+        }
+    }
+
+    private fun play(again: Boolean = false) {
         val p = player ?: return
         val c = channels.getOrNull(index) ?: return
+        if (!again) retries = 0
         prefs.edit().putInt("index", index).apply()
         say("")
         bar.text = "${index + 1}   ${c.name}" + (if (c.group.isNotEmpty()) "   ·   ${c.group}" else "")
@@ -175,7 +212,8 @@ class MainActivity : Activity() {
         main.removeCallbacks(hideBar); main.postDelayed(hideBar, 5000)
         startedAt = SystemClock.elapsedRealtime()
         Log.i(tag, "play #${index + 1}")
-        p.setMediaItem(MediaItem.fromUri(c.url))
+        main.removeCallbacks(probe); main.postDelayed(probe, 2000)
+        p.setMediaSource(source(c.url))
         p.prepare()
         p.playWhenReady = true
     }
@@ -196,7 +234,9 @@ class MainActivity : Activity() {
         }
         override fun onPlayerError(e: PlaybackException) {
             // (the message may hold the stream's address: only the kind of error is logged)
-            Log.w(tag, "#${index + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})")
+            Log.w(tag, "#${index + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})" + (if (retries < 2) ", trying again" else ""))
+            // a decoder that stumbles while channels are changed, or a live stream that moved on, plays at the next try
+            if (retries < 2) { retries++; main.postDelayed({ play(true) }, 300L * retries); return }
             say("This channel does not play (${e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')}).")
         }
     }
