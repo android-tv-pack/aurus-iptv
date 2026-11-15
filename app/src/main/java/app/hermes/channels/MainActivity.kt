@@ -1736,6 +1736,25 @@ class MainActivity : Activity() {
                     recents = emptyList(); prefs.recents = recents
                     publishHome()
                 }
+            )),
+            Page.Tab("About", "Channels is a player for your own playlist: it brings no channels of its own. It is part of Android TV Pack, a set of free apps for TV boxes, " +
+                "with no adverts, no account and no tracking. Your playlist link stays on this device.",
+                stats = { listOf("NETWORK USE" to "Only your playlist, its guide and logos, and the channels you watch") },
+                rows = listOf(
+                Page.Row("Version", "Channels for Android TV", { BuildConfig.VERSION_NAME }, steps = false) {},
+                Page.Row("Developer", "Android TV Pack", { DEVELOPER }, steps = false) {},
+                Page.Row("GitHub", "Source, new versions, reporting a fault", { GITHUB }, steps = false) {
+                    // a TV box seldom has a browser: where there is none, the address is shown large enough to type into a phone
+                    val open = Intent(Intent.ACTION_VIEW, Uri.parse("https://$GITHUB")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try { startActivity(open); return@Row } catch (_: Exception) {}
+                    Sheet(ui, GITHUB, "Open this address on a phone or a computer. There you find the source of the apps, new versions, and where to report a fault or ask for something.")
+                        .button("Close", primary = true).show { page.focus() }
+                },
+                Page.Row("Open-source parts", "What the app is built with", { "" }, steps = false) {
+                    Sheet(ui, "Open-source parts", "AndroidX Media3 (ExoPlayer), by The Android Open Source Project, under the Apache License 2.0.\n\n" +
+                        "Kotlin, by JetBrains and contributors, under the Apache License 2.0.")
+                        .button("Close", primary = true).show { page.focus() }
+                }
             ))
         )
         page.open(tabs)
@@ -1823,6 +1842,8 @@ class MainActivity : Activity() {
     }
 
     private companion object {
+        const val DEVELOPER = "aze038"
+        const val GITHUB = "github.com/android-tv-pack"
         /** the picture's sizes, in the order OK steps through them */
         val PICTURE = arrayOf("As sent", "Fill the screen", "Stretch", "16:9", "4:3")
         // the channel window, in screen units (the screen is 960 wide): lists, channels, then the picture's small window
