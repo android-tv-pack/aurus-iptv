@@ -1028,7 +1028,7 @@ class MainActivity : Activity() {
         infoHint = ui.label(10f, white(105)).apply { text = "Hold OK   sound, subtitles, picture size" }
         col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
         chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
-        for (i in 0..5) {
+        for (i in 0..6) {
             val t = ui.label(11.5f, Color.WHITE, true).apply {
                 isFocusable = true
                 isClickable = true
@@ -1259,6 +1259,7 @@ class MainActivity : Activity() {
             "Subtitles   " + when { all.isEmpty() -> "none"; at < 0 -> "Off"; else -> named(all[at].format, at + 1) + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "") }
         }
         4 -> "Picture   " + PICTURE[pictureMode]
+        5 -> "Lip sync   " + (if (prefs.soundDelay == 0) "0" else (if (prefs.soundDelay > 0) "sound +" else "sound \u2212") + kotlin.math.abs(prefs.soundDelay) + " ms") + "   \u25B2\u25BC"
         else -> "Sleep   " + if (sleepAt == 0L) "off" else "${((sleepAt - SystemClock.elapsedRealtime() + 59_999) / 60_000).coerceAtLeast(1)} min"
     }
 
@@ -1268,6 +1269,8 @@ class MainActivity : Activity() {
         val rec = canShift()
         chips[0].visibility = if (rec) View.VISIBLE else View.GONE
         chips[1].visibility = if (rec && (shiftAt > 0L || paused || Repo.nowNext(current, System.currentTimeMillis()).first != null)) View.VISIBLE else View.GONE
+        // (with the hardware keeping step there is nothing to set)
+        chips[5].visibility = if (tunnel) View.GONE else View.VISIBLE
     }
 
     /** OK on a choice goes to its next value */
@@ -1300,6 +1303,7 @@ class MainActivity : Activity() {
                         .setOverrideForType(TrackSelectionOverride(next.group.mediaTrackGroup, next.index)).setPreferredTextLanguage(lang))
                 }
             }
+            5 -> say("Up plays the sound later (for a picture that is late),\nDown plays it earlier.").also { main.postDelayed({ if (optionsOpen) say("") }, 3500) }
             4 -> {
                 pictureMode = (pictureMode + 1) % PICTURE.size
                 lib?.let { if (testStream == null && current >= 0) prefs.setPicture(it.keyOf(current), pictureMode) }
@@ -2241,7 +2245,15 @@ class MainActivity : Activity() {
             main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000)
             if (keyCode == KeyEvent.KEYCODE_BACK) { closeOptions(); return true }
             // (Left and Right walk the three choices, OK steps the one in focus; the channel stays)
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return true
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                // on "Lip sync": the sound a little later or earlier, heard and seen at once
+                if (chips[5].isFocused) {
+                    prefs.soundDelay = prefs.soundDelay + (if (keyCode == KeyEvent.KEYCODE_DPAD_UP) 20 else -20)
+                    delayUs = prefs.soundDelay * 1000L
+                    say(""); refreshChips()
+                }
+                return true
+            }
             return super.onKeyDown(keyCode, event)
         }
         if (browsing) {

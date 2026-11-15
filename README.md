@@ -33,7 +33,7 @@ Typing a long link with a remote is slow. With a computer on the same network, `
 | Key | While watching |
 |---|---|
 | OK or Left | The channel window |
-| Hold OK | Pause, start over, sound, subtitles, picture, sleep timer |
+| Hold OK | Pause, start over, sound, subtitles, picture, lip sync, sleep timer |
 | Up / Down | Next and previous channel |
 | Right | Programmes of this channel (earlier days on recorded channels) |
 | Digits | Go to a channel number |
