@@ -25,6 +25,14 @@ object Rate {
         }
         // when no picture is missing, the whole stretch gives the finer figure (23.976 against 24)
         val even = steps.all { abs(it - usual) * 8 <= usual }
+        // Some channels give a time only to every few pictures and the ones between get made-up, uneven times (a channel of
+        // 50 a second showed steps of 16.6 and 22.3 ms and was taken for 60). Over a long stretch the average is right
+        // whatever the single steps are: it decides when it lies near a usual rate.
+        if (!even && steps.size >= 30) {
+            val mean = 1_000_000f * steps.size / (t.last() - t.first())
+            val near = usualRates.minByOrNull { abs(it - mean) }!!
+            if (abs(near - mean) <= near * 0.04f) return near
+        }
         val fps = if (even) 1_000_000f * steps.size / (t.last() - t.first()) else standard(1_000_000f / usual)
         return if (fps in 10f..130f) fps else 0f
     }

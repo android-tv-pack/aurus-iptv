@@ -478,6 +478,99 @@ class MainActivity : Activity() {
 
     /** the sound's clock, moved by the "Sound delay" setting: the picture follows this clock */
     private inner class Renderers(ctx: Context) : DefaultRenderersFactory(ctx) {
+        // The box's decoder gives the pictures of some channels times of its own making (steps of 16.6 ms on a channel of 50
+        // a second, then a leap of 190 ms to catch up): shown by those, the channel jerks, and its rate is taken for 60.
+        // The pictures come out in the order they are shown in, so each is given the earliest time that went in and
+        // has not come out yet. A decoder that hands the times back unchanged is left alone.
+        override fun buildVideoRenderers(context: Context, extensionRendererMode: Int, mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
+                                         enableDecoderFallback: Boolean, eventHandler: android.os.Handler, eventListener: androidx.media3.exoplayer.video.VideoRendererEventListener,
+                                         allowedVideoJoiningTimeMs: Long, out: ArrayList<androidx.media3.exoplayer.Renderer>) {
+            out.add(object : androidx.media3.exoplayer.video.MediaCodecVideoRenderer(context, codecAdapterFactory, mediaCodecSelector, allowedVideoJoiningTimeMs,
+                enableDecoderFallback, eventHandler, eventListener, 50) {
+                private val waiting = java.util.TreeSet<Long>()     // the times that went in and have not come out
+                private val taken = HashSet<Long>()                 // ... and the ones given to pictures lately
+                private var lastIndex = -1; private var lastTime = 0L
+                private var own = 0                                 // pictures in a row that came out with a time that never went in
+                private var far = 0                                 // ... and whose given time is far from the decoder's
+                private var off = false                             // the order does not hold on this channel: the decoder's times stand
+                private var said = false
+                private var base = -1; private var low = Int.MAX_VALUE; private var seen = 0
+                private var nIn = 0; private var nOut = 0; private var nSeen = 0
+                private val tIn = LongArray(60); private val tOut = LongArray(60); private val tRaw = LongArray(60)
+                private fun steps(t: LongArray) = (1 until t.size).joinToString(" ") { ((t[it] - t[it - 1]) / 100).toString() }
+                private fun clear() { waiting.clear(); taken.clear(); lastIndex = -1; own = 0; far = 0; off = false; said = false; base = -1; low = Int.MAX_VALUE; seen = 0; nIn = 0; nOut = 0; nSeen = 0 }
+                override fun onPositionReset(positionUs: Long, joining: Boolean, sampleStreamIsResetToKeyFrame: Boolean) { clear(); super.onPositionReset(positionUs, joining, sampleStreamIsResetToKeyFrame) }
+                override fun onDisabled() { clear(); super.onDisabled() }
+                override fun onQueueInputBuffer(buffer: androidx.media3.decoder.DecoderInputBuffer) {
+                    if (!tunnel) { waiting.add(buffer.timeUs); if (waiting.size > 400) waiting.pollFirst() }
+                    if (nIn < tIn.size) { tIn[nIn++] = buffer.timeUs; if (nIn == tIn.size && Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "into the decoder, steps in 0.1 ms: " + steps(tIn)) }
+                    super.onQueueInputBuffer(buffer)
+                }
+                private fun trueTime(index: Int, given: Long): Long {
+                    if (tunnel || off) return given
+                    if (index == lastIndex) return lastTime             // (the same picture, asked about again until it is due)
+                    var t = given
+                    // the time that went in nearest to the one that comes out: the decoder may hand it back unchanged, or moved
+                    // a little onto a grid of its own (which alone makes a channel of 50 a second judder)
+                    val lo = waiting.floor(given); val hi = waiting.ceiling(given)
+                    val near = if (lo != null && (hi == null || given - lo <= hi - given)) lo else hi
+                    if (near != null && kotlin.math.abs(near - given) <= NEAR_US) {
+                        // found: it is the picture's true time; what went in before it will not come out any more
+                        own = 0; far = 0
+                        waiting.headSet(near, true).clear(); taken.clear()
+                        t = near
+                    } else if (taken.any { kotlin.math.abs(it - given) <= NEAR_US }) {
+                        own = 0; far = 0; taken.clear()
+                    } else if (waiting.isNotEmpty()) {
+                        val first = waiting.pollFirst()!!
+                        taken.add(first); if (taken.size > 64) taken.clear()
+                        // (a decoder that makes two pictures of one gives every other picture a time that never went in: only a
+                        // row of pictures with times of the decoder's making counts)
+                        if (++own < 12) { lastIndex = index; lastTime = given; return given }
+                        t = first
+                        if (kotlin.math.abs(t - given) > 600_000) far++ else far = 0
+                        if (far >= 40) { off = true; Log.w(tag, "#${current + 1} the decoder's times and the stream's do not fit together: the decoder's are used"); return given }
+                        if (own == 25 && !said) { said = true; Log.i(tag, "#${current + 1} the decoder gives the pictures times of its own: the stream's times are used") }
+                        // pictures the decoder threw away leave their times behind: when more wait than at the start, the oldest go
+                        low = minOf(low, waiting.size)
+                        if (++seen >= 150) {
+                            if (base < 0) base = low else if (low > base) repeat(low - base) { waiting.pollFirst() }
+                            seen = 0; low = Int.MAX_VALUE
+                        }
+                    }
+                    lastIndex = index; lastTime = t
+                    return t
+                }
+                override fun processOutputBuffer(positionUs: Long, elapsedRealtimeUs: Long, codec: androidx.media3.exoplayer.mediacodec.MediaCodecAdapter?, buffer: java.nio.ByteBuffer?,
+                                                 bufferIndex: Int, bufferFlags: Int, sampleCount: Int, bufferPresentationTimeUs: Long, isDecodeOnlyBuffer: Boolean,
+                                                 isLastBuffer: Boolean, format: androidx.media3.common.Format): Boolean {
+                    val fresh = bufferIndex != lastIndex
+                    val t = trueTime(bufferIndex, bufferPresentationTimeUs)
+                    if (fresh && nSeen < 40 && Log.isLoggable(tag, Log.DEBUG)) { nSeen++; Log.d(tag, "out $nSeen: decoder ${bufferPresentationTimeUs / 1000} ms, used ${t / 1000} ms, playing at ${positionUs / 1000} ms, waiting ${waiting.size} from ${waiting.firstOrNull()?.div(1000)}, own=$own") }
+                    val done = super.processOutputBuffer(positionUs, elapsedRealtimeUs, codec, buffer, bufferIndex, bufferFlags, sampleCount, t, isDecodeOnlyBuffer, isLastBuffer, format)
+                    if (done) {
+                        lastIndex = -1
+                        // the channel's rate, from the times its pictures are shown at; the first ones are not counted
+                        // (a channel often starts with some left out, and the decoder's own times are not yet set right)
+                        val g = playGen
+                        if (frameGen != g) { frameGen = g; frameN = 0 }
+                        if (frameN < frameTimes.size) {
+                            frameTimes[frameN++] = t
+                            if (frameN == frameTimes.size) {
+                                val fps = Rate.of(frameTimes.copyOfRange(20, frameTimes.size))
+                                if (Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "rated from steps (0.1 ms): " + (21 until frameTimes.size).joinToString(" ") { ((frameTimes[it] - frameTimes[it - 1]) / 100).toString() } + "; own=$own waiting=${waiting.size}")
+                                main.post { if (g == playGen) gotRate(fps, "timed") }
+                            }
+                        }
+                        if (nOut < tOut.size) {
+                            tRaw[nOut] = bufferPresentationTimeUs; tOut[nOut++] = t
+                            if (nOut == tOut.size && Log.isLoggable(tag, Log.DEBUG)) { Log.d(tag, "out of the decoder, steps in 0.1 ms: " + steps(tRaw)); Log.d(tag, "shown at, steps in 0.1 ms: " + steps(tOut)) }
+                        }
+                    }
+                    return done
+                }
+            })
+        }
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? {
             val sink = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams) ?: return null
             return object : ForwardingAudioSink(sink) {
@@ -524,21 +617,12 @@ class MainActivity : Activity() {
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, "nosound" in trial).setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, "nopicture" in trial)
             .setPreferredAudioLanguage(prefs.audioLang.ifEmpty { null }).setPreferredTextLanguage(prefs.subLang.ifEmpty { null })
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty()))
-        // a channel starts to move as soon as its first picture is there (the usual 2.5 s in hand first showed that picture standing still);
-        // after a stall it takes more in hand, so that it does not stall again at once
-        val load = androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(20_000, 50_000, 300, 2_000).build()
+        // a channel starts to move with 0.8 s in hand (the usual 2.5 s showed its first picture standing still for a second; with
+        // 0.3 s a channel whose server is slow to begin moved, then stopped again at once); after a stall it takes more in hand
+        val load = androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(20_000, 50_000, 800, 2_500).build()
         val p = ExoPlayer.Builder(this, Renderers(this)).setTrackSelector(sel).setLoadControl(load).build()
         p.setVideoSurfaceView(surface)
         p.addListener(listener)
-        // the times of the first pictures tell the channel's rate within half a second
-        p.setVideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
-            val g = playGen
-            if (frameGen != g) { frameGen = g; frameN = 0 }
-            if (frameN < frameTimes.size) {
-                frameTimes[frameN++] = presentationTimeUs
-                if (frameN == frameTimes.size) { val fps = Rate.of(frameTimes.copyOf()); main.post { if (g == playGen) gotRate(fps, "timed") } }
-            }
-        }
         // (DEBUG) which pieces of the stream were fetched, and the times they carry: never their addresses
         p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             override fun onLoadCompleted(t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, l: androidx.media3.exoplayer.source.LoadEventInfo, d: androidx.media3.exoplayer.source.MediaLoadData) {
@@ -569,7 +653,7 @@ class MainActivity : Activity() {
     /** counts the channel changes, so that pictures of the channel before are not taken for this one's */
     @Volatile private var playGen = 0
     // (these three are touched on the player's own thread only)
-    private val frameTimes = LongArray(14)
+    private val frameTimes = LongArray(80)
     private var frameN = 0
     private var frameGen = -1
     /** pictures a second of the channel that plays, as counted; 0 = not known yet */
@@ -746,9 +830,9 @@ class MainActivity : Activity() {
         steadySound = false
         playKey = if (testStream == null) l.keyOf(i) else ""
         // a channel watched before: the screen is set for its rate now, while the channels change, not a second into its picture
-        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; rateKnown() } }
         // (while channels are changed one after another the screen stays as it is: a change of its rate makes the TV go dark for a moment)
         if (!again) { settled = false; main.removeCallbacks(settle); if (!preview) main.postDelayed(settle, SETTLE_MS) }
+        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; rateKnown() } }
         mending = "mend" in trial || i in tryMend || playKey in prefs.mended
         findUnits = i in needUnits
         // a choice of sound or subtitles made on the channel before does not fit this one's tracks: the languages chosen last decide
@@ -2212,6 +2296,8 @@ class MainActivity : Activity() {
     private companion object {
         /** how long a channel is on before the screen's rate is changed for it */
         const val SETTLE_MS = 5000L
+        /** how far a picture's time may come out of the decoder from the time that went in and still be taken for the same picture */
+        const val NEAR_US = 14_500L
         const val DEVELOPER = "aze038"
         const val GITHUB = "github.com/android-tv-pack"
         /** the picture's sizes, in the order OK steps through them */

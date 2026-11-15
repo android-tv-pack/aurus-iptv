@@ -27,6 +27,15 @@ class RateTest {
         assertEquals(0f, Rate.of(longArrayOf(1, 2)), 0f)
     }
 
+    @Test fun unevenTimesAverageOut() {
+        // 50 a second (ten pictures in 200 ms), but the times step by 16.7 ms for six pictures and 25 ms for four, over and over; one out of order
+        val t = ArrayList<Long>(); var at = 0L
+        while (t.size < 60) { repeat(6) { t.add(at); at += 16_667 }; repeat(4) { t.add(at); at += 25_000 } }
+        val a = t.take(60).toLongArray(); val x = a[3]; a[3] = a[4]; a[4] = x
+        val fps = Rate.of(a)
+        assertEquals(50f, fps, 0.01f)
+    }
+
     @Test fun screenRates() {
         assertEquals(50f, picked(25f), 0f)
         assertEquals(50f, picked(50f), 0f)
