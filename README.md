@@ -1,5 +1,7 @@
 # Aurus IPTV for Android TV
 
+<img src="app/src/main/res/drawable-xhdpi/banner.png" alt="Aurus IPTV" width="320">
+
 A fast, ad-free player for your own IPTV playlist on Android TV and Google TV boxes. You give it a playlist link (M3U) from your provider; it shows the channels with logos and a programme guide, and plays them.
 
 Aurus IPTV brings **no channels of its own**. It has no adverts, no account and no tracking, and your playlist link stays on the device. It is part of [Android TV Pack](https://github.com/android-tv-pack), next to the [Aurora launcher](https://github.com/android-tv-pack/aurora-launcher).

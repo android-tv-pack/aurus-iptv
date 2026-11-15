@@ -2139,9 +2139,12 @@ class MainActivity : Activity() {
                     noTunnel.clear()
                     if (current >= 0) play(current, true)
                 },
-                Page.Row("Sound delay", "+ plays the sound later, \u2212 earlier. If lips move before the words, add", {
+                Page.Row("Sound delay", "+ plays the sound later, \u2212 earlier. If you hear the words before the lips move (the picture is late), add", {
                     (if (prefs.soundDelay > 0) "+" else "") + prefs.soundDelay + " ms" }, { !prefs.hardwareSync }) { d ->
-                    prefs.soundDelay = prefs.soundDelay + 20 * d
+                    // small steps near nought, larger ones further out (some TVs show the picture a second late)
+                    val v = prefs.soundDelay
+                    val step = if (kotlin.math.abs(v + d) < 200) 20 else 100
+                    prefs.soundDelay = if (step == 100) (v + 100 * d) / 100 * 100 else v + 20 * d
                     delayUs = prefs.soundDelay * 1000L
                 },
                 Page.Row("Refresh rate", "The TV is switched to the channel's rate, for even motion. It goes dark for a moment each time it switches",

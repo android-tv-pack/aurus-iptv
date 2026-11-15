@@ -93,7 +93,7 @@ class Prefs(ctx: Context) {
     /** the screen changes its rate only once a channel has been on for a few seconds (false: at once, with every change of channel) */
     var rateWait: Boolean get() = flag("rateWait", true); set(v) = put("rateWait", v)
     /** how much later (+) or earlier (-) the sound is played against the picture, in milliseconds (not with hardwareSync) */
-    var soundDelay: Int get() = p.getInt("soundDelay", 0).coerceIn(-400, 400); set(v) { p.edit().putInt("soundDelay", v.coerceIn(-400, 400)).apply() }
+    var soundDelay: Int get() = p.getInt("soundDelay", 0).coerceIn(-2000, 2000); set(v) { p.edit().putInt("soundDelay", v.coerceIn(-2000, 2000)).apply() }
     /** Up on the remote is the next channel (false: the previous one) */
     var upIsNext: Boolean get() = flag("upIsNext", true); set(v) = put("upIsNext", v)
     /** the channels watched last are given to the TV's home screen */
