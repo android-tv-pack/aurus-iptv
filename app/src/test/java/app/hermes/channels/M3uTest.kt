@@ -1,5 +1,6 @@
 package app.hermes.channels
 
+import app.hermes.channels.core.M3u
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

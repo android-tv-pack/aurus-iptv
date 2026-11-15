@@ -1,8 +1,11 @@
-package app.hermes.channels
+package app.hermes.channels.core
 
-import java.util.Locale
-
-/** Reading a playlist (M3U): plain logic, unit-tested. */
+/**
+ * Reading a playlist (M3U).
+ *
+ * Everything in this package is plain Kotlin with no Android and no Java classes, so that it can be shared
+ * with other platforms (Kotlin Multiplatform) as it is. Unit-tested.
+ */
 object M3u {
 
     class Channel(val name: String, val group: String, val url: String, var logo: String, var tvgId: String) {
@@ -33,11 +36,11 @@ object M3u {
             val l = raw.trim().trimStart('\uFEFF')
             when {
                 l.startsWith("#EXTM3U") -> {
-                    val a = attr.findAll(l).associate { it.groupValues[1].lowercase(Locale.ROOT) to it.groupValues[2] }
+                    val a = attr.findAll(l).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
                     guide = (a["url-tvg"] ?: a["x-tvg-url"] ?: a["tvg-url"] ?: "").split(',').first().trim()
                 }
                 l.startsWith("#EXTINF") -> {
-                    val a = attr.findAll(l).associate { it.groupValues[1].lowercase(Locale.ROOT) to it.groupValues[2] }
+                    val a = attr.findAll(l).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
                     // the name follows the first comma behind the attributes (a name may contain commas itself)
                     val from = attr.findAll(l).lastOrNull()?.range?.last ?: 0
                     val comma = l.indexOf(',', from)
@@ -59,7 +62,7 @@ object M3u {
     }
 
     /** letters and digits only, lower case: for comparing names */
-    fun norm(s: String): String = s.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
+    fun norm(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
 
     /** logos, guide ids and the guide's address that [own] lacks, taken from [other]: by channel number, else by name */
     fun merge(own: Playlist, other: Playlist?): Playlist {
