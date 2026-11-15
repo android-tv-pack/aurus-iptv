@@ -20,6 +20,9 @@ class Prefs(ctx: Context) {
         lines("sources").mapNotNull { l -> l.substringBefore('\t').toIntOrNull()?.let { it to l.substringAfter('\t', "Playlist") } }
             .ifEmpty { if (str("playlist").isNotEmpty()) listOf(0 to "Playlist 1") else emptyList() }
     private fun putSources(list: List<Pair<Int, String>>) = put("sources", list.joinToString("\n") { "${it.first}\t${it.second.replace('\t', ' ').replace('\n', ' ')}" })
+    /** how many channels playlist [id] had when it was read last (0 = not read yet) */
+    fun channelCount(id: Int): Int = p.getInt((if (id == 0) "" else "s$id.") + "count", 0)
+    fun setChannelCount(n: Int) { p.edit().putInt(pre + "count", n).apply() }
     val sourceName: String get() = sources.firstOrNull { it.first == source }?.second ?: ""
     /** a new, empty playlist; returns its number */
     fun addSource(name: String = ""): Int {
@@ -33,7 +36,7 @@ class Prefs(ctx: Context) {
     fun removeSource(id: Int) {
         val rest = sources.filter { it.first != id }
         val e = p.edit()
-        if (id == 0) for (k in arrayOf("playlist", "extra", "guide", "favs", "recents", "last", "scope", "homeRows", "prev", "pictures", "mended")) e.remove(k)
+        if (id == 0) for (k in arrayOf("playlist", "extra", "guide", "favs", "recents", "last", "scope", "homeRows", "prev", "pictures", "mended", "count")) e.remove(k)
         else for (k in p.all.keys) if (k.startsWith("s$id.")) e.remove(k)
         e.apply()
         putSources(rest)

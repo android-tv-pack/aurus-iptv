@@ -250,6 +250,7 @@ class MainActivity : Activity() {
             return
         }
         lib = l
+        if (testStream == null && prefs.channelCount(prefs.source) != l.channels.size) { prefs.setChannelCount(l.channels.size); reopenSettings() }
         say("")
         scope = l.list(scopeName, favs, recents).ifEmpty { scopeName = Library.ALL; l.list(Library.ALL, favs, recents) }
         if (player != null) startPlaying()
@@ -1472,7 +1473,7 @@ class MainActivity : Activity() {
             shownName = id; shown = emptyList()
             chanHint.text = when (id) {
                 "search" -> "Press OK to look for a channel by its name."
-                "settings" -> "Press OK for the settings: playlists, guide, playback, interface and the home screen."
+                "settings" -> "Press OK for the settings: playlists, EPG, playback, interface and the home screen."
                 "source" -> "Press OK to watch from another playlist, or to add one."
                 else -> ""
             }
@@ -1739,7 +1740,7 @@ class MainActivity : Activity() {
     }
 
     private fun addSource() {
-        val sh = Sheet(ui, "Add a playlist", "Paste or type the link of the playlist (M3U). It gets a name of its own, which you can change in the settings.")
+        val sh = Sheet(ui, "Add a playlist", "Paste or type the link of the playlist (M3U). It is added to your playlists as \u201CPlaylist ${prefs.sources.size + 1}\u201D and watched at once; you can rename it afterwards.")
         val e = sh.input("", "The link of the playlist (.m3u or .m3u8)", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         sh.button("Cancel").button("Add", primary = true) {
             val v = e.text.toString().trim()
@@ -1749,6 +1750,7 @@ class MainActivity : Activity() {
             Repo.switchTo(id)
             prefs.playlist = v
             switchSource(id)
+            reopenSettings()
         }.show { if (page.isOpen) page.focus() }
     }
 
@@ -1767,6 +1769,45 @@ class MainActivity : Activity() {
 
     private lateinit var page: Page
 
+    /** the settings are drawn again (the playlists listed in them changed) */
+    private fun reopenSettings() { if (page.isOpen) { page.close(); openSettings() } }
+
+    /** OK on a playlist in the settings: what can be done with it */
+    private fun playlistSheet(id: Int) {
+        val name = prefs.sources.firstOrNull { it.first == id }?.second ?: return
+        val active = id == prefs.source
+        val n = prefs.channelCount(id)
+        val sh = Sheet(ui, name, (if (active) "The playlist you are watching" else "A saved playlist") + (if (n > 0) ", " + String.format(Locale.US, "%,d", n) + " channels." else "."))
+        if (!active) sh.item("Watch this playlist") { switchSource(id); reopenSettings() }
+        sh.item("Rename") {
+            val r = Sheet(ui, "Rename", "What this playlist is called in the lists.")
+            val e = r.input(name, "Name", InputType.TYPE_CLASS_TEXT)
+            r.button("Cancel").button("Save", primary = true) { prefs.renameSource(id, e.text.toString()); reopenSettings() }.show { if (page.isOpen) page.focus() }
+        }
+        sh.item("Change the link") {
+            link("Link of \u201C$name\u201D", "Paste or type the new link. The one in use is not shown, because it holds your subscription key." + (if (active) "" else " The playlist is then the one watched."),
+                "The link of the playlist (.m3u or .m3u8)", "") { v ->
+                if (v.isEmpty()) return@link
+                if (!active) { prefs.source = id; Repo.switchTo(id) }
+                prefs.playlist = v
+                Repo.forget(this)
+                if (active) reload(true) else switchSource(id)
+                reopenSettings()
+            }
+        }
+        if (active) sh.item("Fetch it again", { if (Repo.working) "Working" else "" }) { reload(true) }
+        sh.item("Remove") {
+            Sheet(ui, "Remove \u201C$name\u201D?", "Its link, favourites, recent channels and EPG are forgotten on this device." + (if (prefs.sources.size > 1) " The other playlists stay." else ""))
+                .button("Keep", primary = true).button("Remove") {
+                    Repo.forgetFiles(this, id)
+                    prefs.removeSource(id)
+                    if (active) switchSource(prefs.source)
+                    reopenSettings()
+                }.show { if (page.isOpen) page.focus() }
+        }
+        sh.button("Close").show { if (page.isOpen) page.focus() }
+    }
+
     private fun link(title: String, message: String, hint: String, text: String, done: (String) -> Unit) {
         val sh = Sheet(ui, title, message)
         val e = sh.input(text, hint, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
@@ -1779,59 +1820,38 @@ class MainActivity : Activity() {
         main.removeCallbacks(hideInfo); infoBar.alpha = 0f
         fun num(n: Int) = String.format(Locale.US, "%,d", n)
         val tabs = listOf(
-            Page.Tab("Playlists", "Your channels come from a playlist link (M3U) that your provider gives you. You can have several playlists and choose which one to watch. The link holds your subscription key: " +
-                "it is kept only inside this app, and is not shown again once it is saved.",
+            Page.Tab("Playlists", "Your channels come from a playlist link (M3U) that your provider gives you. Every playlist you add is listed here; " +
+                "press OK on one to watch it, rename it, change its link or remove it. A link holds your subscription key: it is kept only inside this app and is not shown again once it is saved.",
                 stats = {
                     val l = Repo.lib
-                    listOf("CHANNELS" to (if (l == null) (if (Repo.working) "Reading" else "None") else num(l.channels.size) + " in " + l.groups.size + " groups"),
-                        "WITH A LOGO" to (if (l == null) "\u2014" else num(l.channels.indices.count { Repo.logo(it).isNotEmpty() })),
+                    listOf("WATCHING" to prefs.sourceName.ifEmpty { "No playlist yet" },
+                        "CHANNELS" to (if (l == null) (if (Repo.working) "Reading" else "None") else num(l.channels.size) + " in " + l.groups.size + " groups"),
                         "RECORDED" to (if (l == null) "\u2014" else if (Repo.recCount == 0) "None, the playlist names no recordings" else num(Repo.recCount) + " channels, up to " + Repo.recDays + " days back"),
-                        "LAST FETCHED" to stamp(Repo.listTime(this)),
-                        "PLAYLISTS" to prefs.sources.size.toString())
-                }, rows = listOf(
-                Page.Row("Watching from", "Choose another playlist, or add one", { prefs.sourceName.ifEmpty { "No playlist yet" } }, steps = false) {
-                    sourceSheet { if (page.isOpen) page.focus() }
-                },
-                Page.Row("Name", "What this playlist is called", { prefs.sourceName }, { prefs.sources.isNotEmpty() }, steps = false) {
-                    val sh = Sheet(ui, "Name", "What this playlist is called in the lists.")
-                    val e = sh.input(prefs.sourceName, "Name", InputType.TYPE_CLASS_TEXT)
-                    sh.button("Cancel").button("Save", primary = true) { prefs.renameSource(prefs.source, e.text.toString()); page.refresh() }.show { page.focus() }
-                },
-                Page.Row("Playlist link", "The link from your provider", { if (prefs.playlist.isEmpty()) "Not set" else "Set" }, steps = false) {
-                    link("Playlist link", "Paste or type the link of your playlist. The one in use is not shown here, because it holds your subscription key.",
-                        "The link of your playlist (.m3u or .m3u8)", "") { v -> if (v.isNotEmpty()) { ensureSource(); prefs.playlist = v; Repo.forget(this); reload(true) } }
-                },
-                Page.Row("Logos list", "An optional second list that carries the channels' logos", { if (prefs.extra.isEmpty()) "None" else "Set" }, steps = false) {
-                    link("Logos list", "Some providers' playlists have no logos. A second, public list can supply them: channels are matched by number, else by name. Leave empty for none.",
-                        "The link of the list with logos", prefs.extra) { v -> prefs.extra = v; Repo.forget(this); reload(true) }
-                },
-                Page.Row("Fetch the playlist again", "For channels that were added or moved", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) },
-                Page.Row("Remove this playlist", "With its favourites and recent channels", { "" }, { prefs.sources.isNotEmpty() }, steps = false) {
-                    val name = prefs.sourceName
-                    Sheet(ui, "Remove \u201C$name\u201D?", "Its link, favourites, recent channels and guide are forgotten on this device. The other playlists stay.")
-                        .button("Keep", primary = true).button("Remove") {
-                            Repo.forget(this)
-                            prefs.removeSource(prefs.source)
-                            // (the settings close: the focus should not rest on "Remove" for the playlist that is watched next)
-                            page.close()
-                            switchSource(prefs.source)
-                        }.show { if (page.isOpen) page.focus() }
-                }
-            )),
-            Page.Tab("Guide", "What is on now and later comes from a programme guide (XMLTV). Most playlists name one, so there is usually nothing to set. " +
-                "It is read again by itself twice a day; a large guide takes about a minute.",
+                        "LAST FETCHED" to stamp(Repo.listTime(this)))
+                }, rows = prefs.sources.map { (id, name) ->
+                    Page.Row(name, prefs.channelCount(id).let { if (it > 0) num(it) + " channels" else "Not read yet" }, { if (id == prefs.source) "\u2713  Watching" else "" }, steps = false) { playlistSheet(id) }
+                } + Page.Row("\uFF0B  Add a playlist", if (prefs.sources.isEmpty()) "Give the link of your playlist to start" else "Another provider's link, or a list of your own", { "" }, steps = false) { addSource() }
+            ),
+            Page.Tab("EPG", "The EPG (electronic programme guide) tells what is on now and later. Most playlists name one, so there is usually nothing to set. " +
+                "It is read again by itself twice a day; a large one takes about a minute. These settings belong to the playlist that is watched.",
                 stats = {
                     val l = Repo.lib
-                    listOf("STATUS" to Repo.guideNote.ifEmpty { if (Repo.guideTime(this) > 0) "Ready" else if (Repo.working) "Reading the guide" else "Not read yet" },
-                        "CHANNELS WITH A GUIDE" to (if (l == null) "\u2014" else num(Repo.covered) + " of " + num(l.channels.size)),
+                    listOf("STATUS" to Repo.guideNote.ifEmpty { if (Repo.guideTime(this) > 0) "Ready" else if (Repo.working) "Reading the EPG" else "Not read yet" },
+                        "CHANNELS WITH EPG" to (if (l == null) "\u2014" else num(Repo.covered) + " of " + num(l.channels.size)),
+                        "CHANNELS WITH A LOGO" to (if (l == null) "\u2014" else num(l.channels.indices.count { Repo.logo(it).isNotEmpty() })),
                         "LAST READ" to stamp(Repo.guideTime(this)),
                         "FROM" to (Uri.parse(Repo.guideLink).host ?: "\u2014"))
                 }, rows = listOf(
-                Page.Row("Guide link", "XMLTV, .xml or .xml.gz", { if (prefs.guide.isEmpty()) "From the playlist" else "Your own" }, steps = false) {
-                    link("Guide link", "The link of a programme guide in XMLTV form. Leave empty to use the one your playlist names.",
-                        "The link of the guide (.xml or .xml.gz)", prefs.guide) { v -> prefs.guide = v; Repo.forget(this); reload(true) }
+                Page.Row("EPG link", "XMLTV, .xml or .xml.gz", { if (prefs.guide.isEmpty()) "From the playlist" else "Your own" }, steps = false) {
+                    link("EPG link", "The link of a programme guide in XMLTV form. Leave empty to use the one your playlist names.",
+                        "The link of the EPG (.xml or .xml.gz)", prefs.guide) { v -> prefs.guide = v; Repo.forget(this); reload(true) }
                 },
-                Page.Row("Read the guide again", "Also fetches the playlist again", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) }
+                Page.Row("Logos link", "Optional: a second list that gives channels their logos and EPG names", { if (prefs.extra.isEmpty()) "None" else "Set" }, steps = false) {
+                    link("Logos link", "Some providers' playlists carry no logos and do not say which EPG channel each one is. A second, public list (M3U) can supply both: " +
+                        "channels are matched by number, else by name. Leave empty for none.",
+                        "The link of the list with logos", prefs.extra) { v -> prefs.extra = v; Repo.forget(this); reload(true) }
+                },
+                Page.Row("Read the EPG again", "Also fetches the playlist again", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) }
             )),
             Page.Tab("Playback", "Picture and sound are kept in step the standard way, where you can move the sound yourself, or by the box's own video hardware. " +
                 "A channel whose picture stops with the hardware is played the standard way by itself. With the refresh rate on Auto, the screen goes dark for a moment when it changes.",

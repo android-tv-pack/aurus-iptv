@@ -94,6 +94,12 @@ object Repo {
     val guideLink: String get() = guideUrl
     val working: Boolean get() = busy
 
+    /** playlist [s] is removed: what was kept of it on the device goes */
+    fun forgetFiles(ctx: Context, s: Int) {
+        if (s == src) { forget(ctx); return }
+        listFile(ctx, s).delete(); extraFile(ctx, s).delete(); chanFile(ctx, s).delete(); progFile(ctx, s).delete(); pastFile(ctx, s).delete()
+    }
+
     /** a new playlist link was given: what was kept of the old one goes */
     fun forget(ctx: Context) {
         listFile(ctx).delete(); extraFile(ctx).delete(); chanFile(ctx).delete(); progFile(ctx).delete(); pastFile(ctx).delete()
