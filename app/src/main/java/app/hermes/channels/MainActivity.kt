@@ -317,7 +317,16 @@ class MainActivity : Activity() {
             .setConnectTimeoutMs(10000).setReadTimeoutMs(15000)
     }
     // broadcast feeds often have no "IDR" pictures at all: without this their picture never starts
-    private val tsFlags get() = if ("plain" in trial) 0 else DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+    // Pictures are taken as the stream marks them. Working out where each picture begins from its slices instead cut the
+    // pictures of some sport channels in three: the box's decoder took each third for a damaged picture (two errors per
+    // picture) and the channel stuttered. That way is kept only for a channel that shows no picture without it.
+    private val tsFlags get() = if ("plain" in trial) 0
+        else if ("idronly" in trial) DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+        else if (findUnits || "au" in trial) DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+        else DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+    /** the channel that plays has its pictures' beginnings worked out from their slices (see [tsFlags]) */
+    private var findUnits = false
+    private val needUnits = HashSet<Int>()
 
     /**
      * Some channels are sent with picture and sound on two different clocks, hours apart (seen on a 4K channel:
@@ -609,6 +618,13 @@ class MainActivity : Activity() {
                     play(current, true, browsing)
                     return
                 }
+                // (sound but never a picture: its stream may not mark where the pictures begin)
+                if (!tunnel && stuck >= 3 && frames == 0 && current !in needUnits && v != null) {
+                    Log.w(tag, "#${current + 1} sound but no picture: working out the pictures from their slices")
+                    needUnits.add(current)
+                    play(current, true, browsing)
+                    return
+                }
                 if (!tunnel && stuck >= 4 && !mending && current !in tryMend) {
                     Log.w(tag, "#${current + 1} the picture stopped while the sound goes on: reading the stream the careful way")
                     tryMend.add(current)
@@ -734,6 +750,7 @@ class MainActivity : Activity() {
         // (while channels are changed one after another the screen stays as it is: a change of its rate makes the TV go dark for a moment)
         if (!again) { settled = false; main.removeCallbacks(settle); if (!preview) main.postDelayed(settle, SETTLE_MS) }
         mending = "mend" in trial || i in tryMend || playKey in prefs.mended
+        findUnits = i in needUnits
         // a choice of sound or subtitles made on the channel before does not fit this one's tracks: the languages chosen last decide
         selector?.let { it.setParameters(it.buildUponParameters().clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty())) }
@@ -1853,7 +1870,7 @@ class MainActivity : Activity() {
     private fun reload(force: Boolean) {
         closeOptions()
         shade.visibility = View.VISIBLE
-        noTunnel.clear(); tryMend.clear()
+        noTunnel.clear(); tryMend.clear(); needUnits.clear()
         if (browsing) closeBrowse(false)
         lib = null; current = -1
         watchingIdx = -1; lastChannel = -1; shiftAt = 0L; paused = false; shiftProgsFor = -1
