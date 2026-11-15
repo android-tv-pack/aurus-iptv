@@ -87,6 +87,9 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var surface: SurfaceView
     private lateinit var cues: CueView
+    /** black over the picture while a channel changes, for those who do not want the last picture to stay */
+    private lateinit var shade: View
+    private lateinit var cornerClock: TextView
     private lateinit var note: TextView
     private var player: ExoPlayer? = null
     private var selector: DefaultTrackSelector? = null
@@ -137,6 +140,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         ui = Ui(this)
         prefs = Prefs(this)
+        if (Repo.source != prefs.source) Repo.switchTo(prefs.source)
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         // (the order matters: the backdrop of the channel window lies under the picture, its lists over it)
         backdrop = object : View(this) {
@@ -153,15 +157,20 @@ class MainActivity : Activity() {
         root.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
         surface = SurfaceView(this)
         root.addView(surface, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
+        shade = View(this).apply { setBackgroundColor(Color.BLACK); visibility = View.GONE }
+        root.addView(shade, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         cues = CueView(this)
         root.addView(cues, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
+        cornerClock = ui.label(15f, white(225)).apply { setShadowLayer(u(4).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
+        root.addView(cornerClock, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(18), u(30), 0) })
         buildInfo()
         buildBrowse()
         buildGuide()
+        applyGlass()
         note = ui.label(15f, white(225), lines = 4).apply { gravity = Gravity.CENTER; setPadding(u(80), 0, u(80), 0) }
         root.addView(note, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         digits = ui.label(40f, Color.WHITE, true).apply { setShadowLayer(u(6).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
-        root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(28), u(44), 0) })
+        root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
         setContentView(root)
         page = Page(ui, root, "Settings", "Channels " + BuildConfig.VERSION_NAME)
         takeDropped()
@@ -182,7 +191,7 @@ class MainActivity : Activity() {
             return lines
         }
         val list = take("playlist.txt")
-        if (list.isNotEmpty()) { prefs.playlist = list[0]; prefs.extra = list.getOrNull(1).orEmpty(); Repo.forget(this); Log.i(tag, "a playlist link was taken") }
+        if (list.isNotEmpty()) { ensureSource(); prefs.playlist = list[0]; prefs.extra = list.getOrNull(1).orEmpty(); Repo.forget(this); Log.i(tag, "a playlist link was taken") }
         val guide = take("guide.txt")
         if (guide.isNotEmpty()) { prefs.guide = guide[0]; Repo.forget(this); Log.i(tag, "a guide link was taken") }
     }
@@ -218,11 +227,14 @@ class MainActivity : Activity() {
         say("Reading the playlist")
         Repo.start(this, false, { onChannels() }, { onGuide() })
         main.postDelayed(tick, 30_000)
+        clockTick.run()
     }
 
     override fun onStop() {
         super.onStop()
         main.removeCallbacksAndMessages(null)
+        sleepMin = 0; sleepAt = 0L; sleepWarned = false
+        shade.visibility = View.GONE
         closeOptions()
         if (browsing) closeBrowse(false)
         player?.release()
@@ -261,6 +273,27 @@ class MainActivity : Activity() {
         if (infoBar.alpha > 0f) fillInfo()
         if (browsing) { chanAdapter.notifyDataSetChanged(); if (detailsFor >= 0) fillDetails(detailsFor) }
         page.refresh()
+    }
+
+    /** a first playlist to put a link into, where there is none yet */
+    private fun ensureSource() { if (prefs.sources.isEmpty()) { prefs.source = prefs.addSource(); Repo.switchTo(prefs.source) } }
+
+    /** the small clock in the corner: there while watching, when it is wanted */
+    private val clockTick = object : Runnable {
+        override fun run() {
+            main.removeCallbacks(this)
+            val on = prefs.clock && !browsing
+            cornerClock.visibility = if (on) View.VISIBLE else View.GONE
+            if (on) { cornerClock.text = hm(System.currentTimeMillis()); main.postDelayed(this, 10_000) }
+        }
+    }
+
+    /** how see-through the bars over the picture are */
+    private fun applyGlass() {
+        val k = 1f - prefs.glass / 100f
+        fun ink(a: Int) = Color.argb((a * k).toInt(), 6, 9, 18)
+        infoBar.background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(ink(255), ink(244), ink(160), Color.TRANSPARENT))
+        guideBox.background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(ink(252), ink(238)))
     }
 
     private val tick = object : Runnable {
@@ -642,6 +675,7 @@ class MainActivity : Activity() {
         cues.show(emptyList())
         pictureMode = prefs.picture(l.keyOf(i))
         placeSurface()
+        if (prefs.blackSwitch) shade.visibility = View.VISIBLE
         val nowSec = System.currentTimeMillis() / 1000
         p.setMediaSource(source(if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url))
         p.prepare()
@@ -660,6 +694,7 @@ class MainActivity : Activity() {
             Log.i(tag, "#${current + 1} $name after ${SystemClock.elapsedRealtime() - startedAt} ms")
         }
         override fun onRenderedFirstFrame() {
+            shade.visibility = View.GONE
             firstPicture = true
             Log.i(tag, "#${current + 1} first picture after ${SystemClock.elapsedRealtime() - startedAt} ms")
         }
@@ -703,6 +738,8 @@ class MainActivity : Activity() {
                 main.postDelayed({ play(current, true, browsing) }, 300L * retries)
                 return
             }
+            // (the last picture of the channel before would stay under the words)
+            shade.visibility = View.VISIBLE
             say(if (shiftAt > 0L) "This channel has no recording of that time.\nBack returns to what is on now." else "This channel does not play right now.")
         }
     }
@@ -736,6 +773,15 @@ class MainActivity : Activity() {
         cp.width = minOf(w, boxW); cp.height = minOf(h, boxH)
         cp.leftMargin = maxOf(lp.leftMargin, boxX); cp.topMargin = maxOf(lp.topMargin, boxY)
         cues.layoutParams = cp
+        val sp = shade.layoutParams as FrameLayout.LayoutParams
+        sp.width = boxW; sp.height = boxH; sp.leftMargin = boxX; sp.topMargin = boxY
+        shade.layoutParams = sp
+        // what there is to say (a channel that does not play ...) is said where the picture would be
+        val np = note.layoutParams as FrameLayout.LayoutParams
+        if (browsing) { np.gravity = Gravity.TOP or Gravity.START; np.width = boxW; np.leftMargin = boxX; np.topMargin = boxY + boxH / 2 - u(20) }
+        else { np.gravity = Gravity.CENTER; np.width = -1; np.leftMargin = 0; np.topMargin = 0 }
+        note.layoutParams = np
+        note.setPadding(if (browsing) u(24) else u(80), 0, if (browsing) u(24) else u(80), 0)
     }
 
     // ---------------------------------------------------------------- what plays (the bar at the bottom)
@@ -789,11 +835,11 @@ class MainActivity : Activity() {
         infoHint = ui.label(10f, white(105)).apply { text = "Hold OK   sound, subtitles, picture size" }
         col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
         chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
-        for (i in 0..4) {
-            val t = ui.label(12f, Color.WHITE, true).apply {
+        for (i in 0..5) {
+            val t = ui.label(11.5f, Color.WHITE, true).apply {
                 isFocusable = true
                 isClickable = true
-                setPadding(u(13), u(5.5f), u(13), u(6))
+                setPadding(u(11), u(5.5f), u(11), u(6))
             }
             fun paint(has: Boolean) {
                 t.setTextColor(if (has) ui.ink else white(225))
@@ -803,12 +849,13 @@ class MainActivity : Activity() {
             t.setOnFocusChangeListener { _, has -> paint(has) }
             t.setOnClickListener { step(i); if (optionsOpen) { refreshChips(); main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000) } }
             chips += t
-            chipRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = u(8) })
+            chipRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = u(6) })
         }
         col.addView(chipRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = u(9) })
         infoBar.addView(col, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(18) })
         infoClock = ui.label(22f, white(235)).apply { typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) }
         infoBar.addView(infoClock)
+        for (t in arrayOf(infoName, infoNow, infoStart, infoStop, infoLeft, infoNext, infoHint, infoClock)) t.setShadowLayer(u(3).toFloat(), 0f, 0f, Color.BLACK)
         root.addView(infoBar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
     }
 
@@ -938,7 +985,8 @@ class MainActivity : Activity() {
         } else {
             val stood = SystemClock.elapsedRealtime() - pausedSince
             // after a moment's pause what was fetched plays on; after a longer one it is asked for again from where it stopped
-            if (stood < 8000) { paused = false; p.play(); showInfo() } else play(current, at = pausedAt)
+            val back = prefs.resumeBack * 1000L
+            if (stood < 8000 && back == 0L) { paused = false; p.play(); showInfo() } else play(current, at = pausedAt - back)
         }
     }
 
@@ -1017,7 +1065,8 @@ class MainActivity : Activity() {
             val at = all.indexOfFirst { it.selected }
             "Subtitles   " + when { all.isEmpty() -> "none"; at < 0 -> "Off"; else -> named(all[at].format, at + 1) + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "") }
         }
-        else -> "Picture   " + PICTURE[pictureMode]
+        4 -> "Picture   " + PICTURE[pictureMode]
+        else -> "Sleep   " + if (sleepAt == 0L) "off" else "${((sleepAt - SystemClock.elapsedRealtime() + 59_999) / 60_000).coerceAtLeast(1)} min"
     }
 
     private fun refreshChips() {
@@ -1058,12 +1107,37 @@ class MainActivity : Activity() {
                         .setOverrideForType(TrackSelectionOverride(next.group.mediaTrackGroup, next.index)).setPreferredTextLanguage(lang))
                 }
             }
-            else -> {
+            4 -> {
                 pictureMode = (pictureMode + 1) % PICTURE.size
                 lib?.let { if (testStream == null && current >= 0) prefs.setPicture(it.keyOf(current), pictureMode) }
                 placeSurface()
             }
+            else -> setSleep(when (sleepMin) { 0 -> 30; 30 -> 60; 60 -> 90; else -> 0 })
         }
+    }
+
+    // ---- the sleep timer: after so many minutes playback stops and the app is left; a minute before, it says so
+    private var sleepMin = 0
+    private var sleepAt = 0L
+    private var sleepWarned = false
+    private val sleepWarn = Runnable {
+        sleepWarned = true
+        say("Sleep timer: stopping in a minute.\nPress any key to keep watching.")
+        main.postDelayed(sleepStop, 60_000)
+    }
+    private val sleepStop = Runnable {
+        sleepWarned = false; sleepMin = 0; sleepAt = 0L
+        say("")
+        player?.pause()
+        moveTaskToBack(true)
+    }
+    private fun setSleep(min: Int) {
+        main.removeCallbacks(sleepWarn); main.removeCallbacks(sleepStop)
+        if (sleepWarned) say("")
+        sleepWarned = false
+        sleepMin = min
+        sleepAt = if (min == 0) 0L else SystemClock.elapsedRealtime() + min * 60_000L
+        if (min > 0) main.postDelayed(sleepWarn, (min - 1) * 60_000L)
     }
 
     private fun openOptions() {
@@ -1172,7 +1246,7 @@ class MainActivity : Activity() {
             val shownHere = id == shownName
             h.mark.visibility = if (shownHere) View.VISIBLE else View.INVISIBLE
             h.name.text = name
-            h.name.setTextColor(if (shownHere) accent else if (id == "search" || id == "settings") white(185) else white(235))
+            h.name.setTextColor(if (shownHere) accent else if (id == "search" || id == "settings" || id == "source") white(185) else white(235))
             h.name.typeface = Typeface.create(if (shownHere) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
             h.count.text = groupCounts[id]?.let { String.format(Locale.US, "%,d", it) } ?: ""
             return row
@@ -1318,6 +1392,7 @@ class MainActivity : Activity() {
             when (val id = groupRows[p].first) {
                 "search" -> askSearch()
                 "settings" -> openSettings()
+                "source" -> sourceSheet { if (browsing) groupList.requestFocus() }
                 else -> { choose(id, false); if (shown.isNotEmpty()) chanList.requestFocus() }
             }
         }
@@ -1371,6 +1446,8 @@ class MainActivity : Activity() {
         val l = lib
         val out = ArrayList<Pair<String, String>>()
         val counts = HashMap<String, Int>()
+        // (with more than one playlist: which one is watched, and the way to another)
+        if (prefs.sources.size > 1) { out += "#source" to "PLAYLIST"; out += "source" to prefs.sourceName; out += "#lists" to "LISTS" }
         out += "search" to "Search"
         if (found.isNotEmpty()) out += (Library.FOUND + found) to "\u201C$found\u201D"
         out += Library.FAVS to "Favourites"
@@ -1380,7 +1457,7 @@ class MainActivity : Activity() {
             if (l.groups.isNotEmpty()) out += "#groups" to "GROUPS"
             // (shown with a capital, whatever the playlist writes)
             for (g in l.groups) out += g to g.replaceFirstChar { it.titlecase() }
-            for ((id, _) in out) if (!id.startsWith("#") && id != "search") counts[id] = l.list(id, favs, recents).size
+            for ((id, _) in out) if (!id.startsWith("#") && id != "search" && id != "source") counts[id] = l.list(id, favs, recents).size
         }
         out += "#app" to "APP"
         out += "settings" to "Settings"
@@ -1391,11 +1468,12 @@ class MainActivity : Activity() {
     /** shows the channels of the list [id] in the middle column */
     private fun choose(id: String, focusCurrent: Boolean) {
         val l = lib
-        if (id == "search" || id == "settings" || l == null) {
+        if (id == "search" || id == "settings" || id == "source" || l == null) {
             shownName = id; shown = emptyList()
             chanHint.text = when (id) {
                 "search" -> "Press OK to look for a channel by its name."
-                "settings" -> "Press OK for the settings: playlist, guide, playback and the home screen."
+                "settings" -> "Press OK for the settings: playlists, guide, playback, interface and the home screen."
+                "source" -> "Press OK to watch from another playlist, or to add one."
                 else -> ""
             }
         } else {
@@ -1410,7 +1488,7 @@ class MainActivity : Activity() {
             }
         }
         headList.text = when (id) {
-            "search", "settings" -> ""
+            "search", "settings", "source" -> ""
             else -> (groupRows.firstOrNull { it.first == id }?.second ?: id).uppercase(Locale.getDefault()) + "   \u00B7   " + String.format(Locale.US, "%,d", shown.size)
         }
         chanAdapter.notifyDataSetChanged()
@@ -1431,6 +1509,7 @@ class MainActivity : Activity() {
         groupRows = groupsNow()
         backdrop.visibility = View.VISIBLE
         browsePage.visibility = View.VISIBLE
+        clockTick.run()
         placeSurface()
         val name = if (groupRows.any { it.first == scopeName } && current in l.list(scopeName, favs, recents)) scopeName else Library.ALL
         choose(name, true)
@@ -1445,6 +1524,7 @@ class MainActivity : Activity() {
         browsing = false
         main.removeCallbacks(lookLater)
         browsePage.visibility = View.GONE
+        clockTick.run()
         backdrop.visibility = View.GONE
         detailsFor = -1
         placeSurface()
@@ -1637,7 +1717,45 @@ class MainActivity : Activity() {
         }.show { if (browsing && !chanList.hasFocus()) groupList.requestFocus() }
     }
 
+    /** another playlist is watched from now on: its channels, favourites, recent channels and guide */
+    private fun switchSource(id: Int) {
+        if (id == prefs.source && Repo.lib != null) return
+        prefs.source = id
+        Repo.switchTo(id)
+        favs = prefs.favs.toMutableSet()
+        recents = prefs.recents
+        scopeName = prefs.scope.ifEmpty { Library.ALL }
+        found = ""
+        Home.publish(this, prefs.homeRows)
+        reload(false)
+    }
+
+    /** choosing among the playlists, or adding one */
+    private fun sourceSheet(after: () -> Unit) {
+        val sh = Sheet(ui, "Playlists", "Each playlist has its own channels, favourites and recent channels. Choose the one to watch.")
+        for ((id, name) in prefs.sources) sh.item(name, { if (id == prefs.source) "Watching" else "" }) { switchSource(id) }
+        sh.item("Add a playlist", { "" }) { addSource() }
+        sh.button("Close").show(after)
+    }
+
+    private fun addSource() {
+        val sh = Sheet(ui, "Add a playlist", "Paste or type the link of the playlist (M3U). It gets a name of its own, which you can change in the settings.")
+        val e = sh.input("", "The link of the playlist (.m3u or .m3u8)", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        sh.button("Cancel").button("Add", primary = true) {
+            val v = e.text.toString().trim()
+            if (v.isEmpty()) return@button
+            val id = prefs.addSource()
+            prefs.source = id
+            Repo.switchTo(id)
+            prefs.playlist = v
+            switchSource(id)
+        }.show { if (page.isOpen) page.focus() }
+    }
+
     private fun reload(force: Boolean) {
+        closeOptions()
+        shade.visibility = View.VISIBLE
+        noTunnel.clear(); tryMend.clear()
         if (browsing) closeBrowse(false)
         lib = null; current = -1
         watchingIdx = -1; lastChannel = -1; shiftAt = 0L; paused = false; shiftProgsFor = -1
@@ -1661,24 +1779,44 @@ class MainActivity : Activity() {
         main.removeCallbacks(hideInfo); infoBar.alpha = 0f
         fun num(n: Int) = String.format(Locale.US, "%,d", n)
         val tabs = listOf(
-            Page.Tab("Playlist", "Your channels come from a playlist link (M3U) that your provider gives you. The link holds your subscription key: " +
+            Page.Tab("Playlists", "Your channels come from a playlist link (M3U) that your provider gives you. You can have several playlists and choose which one to watch. The link holds your subscription key: " +
                 "it is kept only inside this app, and is not shown again once it is saved.",
                 stats = {
                     val l = Repo.lib
                     listOf("CHANNELS" to (if (l == null) (if (Repo.working) "Reading" else "None") else num(l.channels.size) + " in " + l.groups.size + " groups"),
                         "WITH A LOGO" to (if (l == null) "\u2014" else num(l.channels.indices.count { Repo.logo(it).isNotEmpty() })),
                         "RECORDED" to (if (l == null) "\u2014" else if (Repo.recCount == 0) "None, the playlist names no recordings" else num(Repo.recCount) + " channels, up to " + Repo.recDays + " days back"),
-                        "LAST FETCHED" to stamp(Repo.listTime(this)))
+                        "LAST FETCHED" to stamp(Repo.listTime(this)),
+                        "PLAYLISTS" to prefs.sources.size.toString())
                 }, rows = listOf(
+                Page.Row("Watching from", "Choose another playlist, or add one", { prefs.sourceName.ifEmpty { "No playlist yet" } }, steps = false) {
+                    sourceSheet { if (page.isOpen) page.focus() }
+                },
+                Page.Row("Name", "What this playlist is called", { prefs.sourceName }, { prefs.sources.isNotEmpty() }, steps = false) {
+                    val sh = Sheet(ui, "Name", "What this playlist is called in the lists.")
+                    val e = sh.input(prefs.sourceName, "Name", InputType.TYPE_CLASS_TEXT)
+                    sh.button("Cancel").button("Save", primary = true) { prefs.renameSource(prefs.source, e.text.toString()); page.refresh() }.show { page.focus() }
+                },
                 Page.Row("Playlist link", "The link from your provider", { if (prefs.playlist.isEmpty()) "Not set" else "Set" }, steps = false) {
                     link("Playlist link", "Paste or type the link of your playlist. The one in use is not shown here, because it holds your subscription key.",
-                        "The link of your playlist (.m3u or .m3u8)", "") { v -> if (v.isNotEmpty()) { prefs.playlist = v; Repo.forget(this); reload(true) } }
+                        "The link of your playlist (.m3u or .m3u8)", "") { v -> if (v.isNotEmpty()) { ensureSource(); prefs.playlist = v; Repo.forget(this); reload(true) } }
                 },
                 Page.Row("Logos list", "An optional second list that carries the channels' logos", { if (prefs.extra.isEmpty()) "None" else "Set" }, steps = false) {
                     link("Logos list", "Some providers' playlists have no logos. A second, public list can supply them: channels are matched by number, else by name. Leave empty for none.",
                         "The link of the list with logos", prefs.extra) { v -> prefs.extra = v; Repo.forget(this); reload(true) }
                 },
-                Page.Row("Fetch the playlist again", "For channels that were added or moved", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) }
+                Page.Row("Fetch the playlist again", "For channels that were added or moved", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) },
+                Page.Row("Remove this playlist", "With its favourites and recent channels", { "" }, { prefs.sources.isNotEmpty() }, steps = false) {
+                    val name = prefs.sourceName
+                    Sheet(ui, "Remove \u201C$name\u201D?", "Its link, favourites, recent channels and guide are forgotten on this device. The other playlists stay.")
+                        .button("Keep", primary = true).button("Remove") {
+                            Repo.forget(this)
+                            prefs.removeSource(prefs.source)
+                            // (the settings close: the focus should not rest on "Remove" for the playlist that is watched next)
+                            page.close()
+                            switchSource(prefs.source)
+                        }.show { if (page.isOpen) page.focus() }
+                }
             )),
             Page.Tab("Guide", "What is on now and later comes from a programme guide (XMLTV). Most playlists name one, so there is usually nothing to set. " +
                 "It is read again by itself twice a day; a large guide takes about a minute.",
@@ -1721,8 +1859,25 @@ class MainActivity : Activity() {
                     prefs.archive = !prefs.archive
                     if (!prefs.archive && (shiftAt > 0L || paused) && current >= 0) play(current)
                 },
+                Page.Row("After a pause", "The channel goes on a little earlier, so that nothing is missed", { if (prefs.resumeBack == 0) "Where it stopped" else "${prefs.resumeBack} s earlier" }, { prefs.archive }) { d ->
+                    prefs.resumeBack = when (prefs.resumeBack) { 0 -> if (d > 0) 5 else 10; 5 -> if (d > 0) 10 else 0; else -> if (d > 0) 0 else 5 }
+                },
                 Page.Row("Up on the remote", "Which way Up and Down go through the channels", { if (prefs.upIsNext) "Next channel" else "Previous channel" }) {
                     prefs.upIsNext = !prefs.upIsNext
+                }
+            )),
+            Page.Tab("Interface", "How the app looks while you watch. The sleep timer is not here: hold OK while watching, it is the last choice in the bar.",
+                rows = listOf(
+                Page.Row("Clock on screen", "A small clock stays in the top right corner", { if (prefs.clock) "On" else "Off" }) {
+                    prefs.clock = !prefs.clock
+                    clockTick.run()
+                },
+                Page.Row("While a channel changes", "What is seen until the new channel's picture comes", { if (prefs.blackSwitch) "Black screen" else "Last picture" }) {
+                    prefs.blackSwitch = !prefs.blackSwitch
+                },
+                Page.Row("See-through bars", "How much of the picture shows through the bar and the programme list", { "${prefs.glass} %" }) { d ->
+                    prefs.glass = prefs.glass + 10 * d
+                    applyGlass()
                 }
             )),
             Page.Tab("Home screen", "The channels you watched last, and your favourites, can be given to the TV's home screen. Each one there opens this app directly on that channel.",
@@ -1772,6 +1927,8 @@ class MainActivity : Activity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // (a key in the sleep timer's last minute: someone is still watching)
+        if (sleepWarned) { setSleep(0); return true }
         if (page.isOpen) {
             if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU) { page.close(); return true }
             return super.onKeyDown(keyCode, event)

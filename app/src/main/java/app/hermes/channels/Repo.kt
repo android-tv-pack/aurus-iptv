@@ -36,7 +36,21 @@ object Repo {
     /** "", "Reading the guide", "No guide" ... for the settings */
     @Volatile var guideNote = ""
         private set
-    @Volatile private var busy = false
+    /** the thread that fetches for the playlist that is watched (null: none does) */
+    @Volatile private var worker: Any? = null
+    private val busy: Boolean get() = worker != null
+    /** the playlist that is watched (see Prefs.source), and a count of the times it or its link changed: what a thread
+     *  started before such a change still finds out goes to that playlist's files, not to what is shown */
+    @Volatile private var src = 0
+    @Volatile private var gen = 0
+    val source: Int get() = src
+    private fun tail(s: Int) = if (s == 0) "" else "-$s"
+
+    /** another playlist is watched from now on */
+    fun switchTo(s: Int) {
+        src = s; gen++; worker = null
+        lib = null; gids = emptyArray(); icons = emptyMap(); soon = emptyMap(); error = ""; guideNote = ""; covered = 0; recDays = 0; recCount = 0; guideUrl = ""
+    }
     @Volatile private var gids: Array<String?> = emptyArray()
     @Volatile private var icons: Map<String, String> = emptyMap()
     @Volatile private var soon: Map<String, List<Guide.Prog>> = emptyMap()
@@ -60,12 +74,12 @@ object Repo {
     }
     private fun text(address: String) = fetch(address).bufferedReader().use { it.readText() }
 
-    private fun listFile(ctx: Context) = File(ctx.filesDir, "playlist.m3u")
-    private fun extraFile(ctx: Context) = File(ctx.filesDir, "extra.m3u")
-    private fun chanFile(ctx: Context) = File(ctx.filesDir, "guide-channels.tsv")
-    private fun progFile(ctx: Context) = File(ctx.filesDir, "guide2.tsv")
+    private fun listFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "playlist${tail(s)}.m3u")
+    private fun extraFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "extra${tail(s)}.m3u")
+    private fun chanFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "guide-channels${tail(s)}.tsv")
+    private fun progFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "guide2${tail(s)}.tsv")
     /** what was on earlier (titles only), for the channels that are recorded */
-    private fun pastFile(ctx: Context) = File(ctx.filesDir, "guide-past.tsv")
+    private fun pastFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "guide-past${tail(s)}.tsv")
     /** how many days back the playlist's channels are recorded at most (0 = none is) */
     @Volatile var recDays = 0
         private set
@@ -86,6 +100,7 @@ object Repo {
         File(ctx.filesDir, "guide.tsv").delete()            // (the file of an earlier version)
         covered = 0
         lib = null; gids = emptyArray(); icons = emptyMap(); soon = emptyMap(); error = ""
+        gen++; worker = null
     }
 
     /**
@@ -97,39 +112,43 @@ object Repo {
         val prefs = Prefs(app)
         if (lib != null && !force) { ready(); if (!busy && soon.isEmpty()) loadGuide(app, prefs, false, guide) else guide(); return }
         if (busy) return
-        if (prefs.playlist.isEmpty()) { error = "none"; ready(); return }
-        busy = true
+        val link = prefs.playlist; val extraLink = prefs.extra; val ownGuide = prefs.guide
+        if (link.isEmpty()) { error = "none"; ready(); return }
+        val s = src; val g = gen
+        val me = Any(); worker = me
+        val readyG = Runnable { if (g == gen) ready() }; val guideG = { if (g == gen) guide() }
         Thread({
             try {
-                val lf = listFile(app); val ef = extraFile(app)
+                val lf = listFile(app, s); val ef = extraFile(app, s)
                 val t0 = SystemClock.elapsedRealtime()
                 val stale = force || !lf.exists() || System.currentTimeMillis() - lf.lastModified() > FRESH_MS
                 var own: String? = if (lf.exists() && !force) lf.readText() else null
                 var fetched = false
-                if (own == null) { own = text(prefs.playlist); lf.writeText(own); fetched = true }
+                if (own == null) { own = text(link); lf.writeText(own); fetched = true }
                 var other: String? = if (ef.exists() && !force) ef.readText() else null
-                if (other == null && prefs.extra.isNotEmpty()) other = try { text(prefs.extra).also { ef.writeText(it) } } catch (_: Exception) { null }
+                if (other == null && extraLink.isNotEmpty()) other = try { text(extraLink).also { ef.writeText(it) } } catch (_: Exception) { null }
                 val merged = M3u.merge(M3u.parse(own), other?.let { M3u.parse(it) })
                 if (merged.channels.isEmpty()) throw java.io.IOException("empty")
+                if (g != gen) return@Thread
                 recCount = merged.channels.count { it.rec != null }
                 recDays = merged.channels.maxOfOrNull { it.rec?.days ?: 0 } ?: 0
                 lib = Library(merged.channels)
-                guideUrl = prefs.guide.ifEmpty { merged.guideUrl }
+                guideUrl = ownGuide.ifEmpty { merged.guideUrl }
                 error = ""
                 Log.i(TAG, "playlist: ${merged.channels.size} channels, ${M3u.groups(merged.channels).size} groups, ${merged.channels.count { it.logo.isNotEmpty() }} logos, $recCount recorded (up to $recDays days), ${SystemClock.elapsedRealtime() - t0} ms" + (if (fetched) " (fetched)" else ""))
-                main.post(ready)
+                main.post(readyG)
                 // an old copy is replaced for the next start
                 if (stale && !fetched) try {
-                    val fresh = text(prefs.playlist)
+                    val fresh = text(link)
                     if (M3u.parse(fresh).channels.isNotEmpty()) lf.writeText(fresh)
-                    if (prefs.extra.isNotEmpty()) text(prefs.extra).let { if (it.isNotEmpty()) ef.writeText(it) }
+                    if (extraLink.isNotEmpty()) text(extraLink).let { if (it.isNotEmpty()) ef.writeText(it) }
                 } catch (_: Exception) {}
-                guideWork(app, force, guide)
+                guideWork(app, force, guideG, s, g)
             } catch (e: Exception) {
                 Log.w(TAG, "playlist failed: ${e.javaClass.simpleName}")
-                error = "failed"
-                main.post(ready)
-            } finally { busy = false }
+                if (g == gen) error = "failed"
+                main.post(readyG)
+            } finally { if (worker === me) worker = null }
         }, "channels-list").start()
     }
 
@@ -137,23 +156,25 @@ object Repo {
 
     private fun loadGuide(app: Context, prefs: Prefs, force: Boolean, guide: () -> Unit) {
         if (busy) return
-        busy = true
-        Thread({ try { guideWork(app, force, guide) } finally { busy = false } }, "channels-guide").start()
+        val s = src; val g = gen
+        val me = Any(); worker = me
+        Thread({ try { guideWork(app, force, { if (g == gen) guide() }, s, g) } finally { if (worker === me) worker = null } }, "channels-guide").start()
     }
 
-    private fun guideWork(app: Context, force: Boolean, changed: () -> Unit) {
+    private fun guideWork(app: Context, force: Boolean, changed: () -> Unit, s: Int, g: Int) {
+        if (g != gen) return
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
         val l = lib ?: return
-        if (guideUrl.isEmpty()) { guideNote = "No guide link"; index(app, l); main.post(changed); return }
-        val cf = chanFile(app); val pf = progFile(app)
-        if (cf.exists() && pf.exists()) { index(app, l); loadSoon(app); main.post(changed) }
-        val qf = pastFile(app)
+        if (guideUrl.isEmpty()) { if (g == gen) guideNote = "No guide link"; index(app, l, s, g); main.post { if (g == gen) changed() }; return }
+        val cf = chanFile(app, s); val pf = progFile(app, s)
+        if (cf.exists() && pf.exists()) { index(app, l, s, g); loadSoon(app, s, g); main.post { if (g == gen) changed() } }
+        val qf = pastFile(app, s)
         val pastMs = recDays.coerceAtMost(7) * 86_400_000L
         if (force || !cf.exists() || !pf.exists() || (pastMs > 0 && !qf.exists()) || System.currentTimeMillis() - pf.lastModified() > FRESH_MS) {
-            guideNote = "Reading the guide"
+            if (g == gen) guideNote = "Reading the guide"
             File(app.filesDir, "guide.tsv").delete()            // (the file of an earlier version, without descriptions)
-            main.post(changed)
-            val tc = File(app.filesDir, "guide-channels.tmp"); val tp = File(app.filesDir, "guide.tmp"); val tq = File(app.filesDir, "guide-past.tmp")
+            main.post { if (g == gen) changed() }
+            val tc = File(app.filesDir, "guide-channels${tail(s)}.tmp"); val tp = File(app.filesDir, "guide${tail(s)}.tmp"); val tq = File(app.filesDir, "guide-past${tail(s)}.tmp")
             try {
                 val t0 = SystemClock.elapsedRealtime()
                 val now = System.currentTimeMillis()
@@ -181,22 +202,22 @@ object Repo {
                 if (chans == 0) throw java.io.IOException("no channels")
                 tc.renameTo(cf); tp.renameTo(pf); tq.renameTo(qf)
                 Log.i(TAG, "guide: $chans channels, $progs programmes, ${(SystemClock.elapsedRealtime() - t0) / 1000} s")
-                guideNote = ""
-                index(app, l); loadSoon(app)
+                if (g == gen) guideNote = ""
+                index(app, l, s, g); loadSoon(app, s, g)
             } catch (e: Exception) {
                 tc.delete(); tp.delete(); tq.delete()
-                guideNote = if (cf.exists()) "" else "Could not read the guide"
+                if (g == gen) guideNote = if (cf.exists()) "" else "Could not read the guide"
                 Log.w(TAG, "guide failed: ${e.javaClass.simpleName}")
             }
-            main.post(changed)
-        } else guideNote = ""
+            main.post { if (g == gen) changed() }
+        } else if (g == gen) guideNote = ""
     }
 
     /** which channel of the guide each channel of the playlist is: by the id the playlist states, else by name */
-    private fun index(app: Context, l: Library) {
+    private fun index(app: Context, l: Library, s: Int, gn: Int) {
         val ids = HashSet<String>(); val names = HashMap<String, String>(); val ic = HashMap<String, String>()
         try {
-            chanFile(app).bufferedReader().useLines { lines ->
+            chanFile(app, s).bufferedReader().useLines { lines ->
                 for (line in lines) {
                     val f = line.split('\t')
                     if (f.size < 2) continue
@@ -212,17 +233,18 @@ object Repo {
             g[i] = if (c.tvgId.isNotEmpty() && c.tvgId in ids) c.tvgId else names[M3u.norm(c.name)]
             if (g[i] != null) n++
         }
+        if (gn != gen) return
         icons = ic; gids = g; covered = n
         if (ids.isNotEmpty()) Log.i(TAG, "guide covers $n of ${l.channels.size} channels")
     }
 
     /** what is on in the next hours, for the channels of the playlist */
-    private fun loadSoon(app: Context) {
+    private fun loadSoon(app: Context, s: Int, g: Int) {
         val want = gids.filterNotNull().toHashSet()
         val now = System.currentTimeMillis()
         val out = HashMap<String, ArrayList<Guide.Prog>>()
         try {
-            progFile(app).bufferedReader().useLines { lines ->
+            progFile(app, s).bufferedReader().useLines { lines ->
                 for (line in lines) {
                     val a = line.indexOf('\t')
                     if (a <= 0 || line.substring(0, a) !in want) continue
@@ -234,6 +256,7 @@ object Repo {
             }
         } catch (_: Exception) {}
         for (v in out.values) v.sortBy { it.start }
+        if (g != gen) return
         soon = out; soonAt = now
     }
 
@@ -241,7 +264,8 @@ object Repo {
     fun keepFresh(ctx: Context, changed: () -> Unit) {
         if (busy || lib == null || soon.isEmpty() || System.currentTimeMillis() - soonAt < 1800_000) return
         val app = ctx.applicationContext
-        Thread({ loadSoon(app); main.post(changed) }, "channels-soon").start()
+        val s = src; val g = gen
+        Thread({ loadSoon(app, s, g); main.post { if (g == gen) changed() } }, "channels-soon").start()
     }
 
     fun logo(i: Int): String {
