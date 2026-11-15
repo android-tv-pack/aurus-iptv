@@ -425,11 +425,36 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * A channel's server that is busy for a moment (it answers 502, 503 ... to a request for the next piece) is asked
+     * again, a little later each time, for about half a minute, instead of giving the channel up after three quick tries.
+     */
+    private val patient = object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(8) {
+        private fun busy(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo) =
+            (info.exception as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode in 500..599
+        override fun getFallbackSelectionFor(options: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.FallbackOptions,
+                                             info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo) =
+            if (busy(info)) null else super.getFallbackSelectionFor(options, info)
+        override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+            if (!busy(info)) return super.getRetryDelayMsFor(info)
+            busyAt = SystemClock.elapsedRealtime()
+            if (info.errorCount == 1 || Log.isLoggable(tag, Log.DEBUG)) Log.w(tag, "#${current + 1} the server is busy (HTTP ${(info.exception as androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException).responseCode}): asking again" +
+                " (try ${info.errorCount}, the piece from ${info.mediaLoadData.mediaStartTimeMs} to ${info.mediaLoadData.mediaEndTimeMs} ms, the list reaches to $listEndMs ms)")
+            return minOf(1000L * info.errorCount, 4000L)
+        }
+    }
+
+    /** when the channel's server last refused a piece (0 = it has not) */
+    @Volatile private var busyAt = 0L
+
+    /** how far the channel's list of pieces reaches, as the player last saw it (for the log) */
+    @Volatile private var listEndMs = 0L
+
     private fun source(address: String): MediaSource {
         val item = MediaItem.fromUri(address)
         return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
-            HlsMediaSource.Factory(http).setExtractorFactory(if (mending && "stock" !in trial) Pieces(align) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
-        else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).createMediaSource(item)
+            HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(if (mending && "stock" !in trial) Pieces(align) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+        else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(patient).createMediaSource(item)
     }
 
     /** how much later the sound is played against the picture (the "Sound delay" setting), in microseconds */
@@ -521,6 +546,10 @@ class MainActivity : Activity() {
 
     // what the watch below remembers of the channel that plays
     private var lastFrames = -1
+    /** since when the player waits for the channel's server, and since when it plays without waiting (0 = it does not) */
+    private var waitSince = 0L
+    private var goodSince = 0L
+    private var gaveUp = false
     private var stuck = 0
     private var rateAt = 0L
     private var rateFrom = 0
@@ -544,10 +573,30 @@ class MainActivity : Activity() {
             val p = player ?: return
             val v = p.videoDecoderCounters; val a = p.audioDecoderCounters
             if (Log.isLoggable(tag, Log.DEBUG)) {
-                Log.d(tag, "#${current + 1} state=${p.playbackState} at=${p.currentPosition}ms tunnel=$tunnel buffered=${p.totalBufferedDuration}ms " +
+                listEndMs = p.duration
+                Log.d(tag, "#${current + 1} state=${p.playbackState} list=${p.duration}ms behind=${p.currentLiveOffset}ms at=${p.currentPosition}ms tunnel=$tunnel buffered=${p.totalBufferedDuration}ms " +
                     "video[in=${v?.queuedInputBufferCount} out=${v?.renderedOutputBufferCount} drop=${v?.droppedBufferCount}] audio[out=${a?.renderedOutputBufferCount}]")
             }
             val now = SystemClock.elapsedRealtime()
+            // a channel whose server sends next to nothing (the player waits and waits): asked again, as changing away and back would;
+            // one that has played steadily for a while has its tries back
+            if (p.playbackState == Player.STATE_BUFFERING && p.playWhenReady) {
+                goodSince = 0L
+                if (waitSince == 0L) waitSince = now
+                else if (now - waitSince >= (if (busyAt > 0 && now - busyAt < 6_000) 3_000 else 12_000)) {
+                    if (retries < 5) {
+                        retries++
+                        Log.w(tag, "#${current + 1} nothing arrives for ${(now - waitSince) / 1000} s: asking the server again (try $retries)")
+                        say("The channel's server is slow.\nTrying again \u2026")
+                        play(current, true, browsing)
+                        return
+                    }
+                    if (!gaveUp) { gaveUp = true; Log.w(tag, "#${current + 1} the server does not deliver"); say("This channel's server is not delivering right now.\nIt may play again in a while.") }
+                }
+            } else {
+                waitSince = 0L
+                if (p.playbackState == Player.STATE_READY) { if (goodSince == 0L) goodSince = now else if (now - goodSince > 10_000) { retries = 0; gaveUp = false } }
+            }
             val frames = if (v == null) -1 else v.renderedOutputBufferCount + v.droppedBufferCount + v.skippedOutputBufferCount
             if (p.playbackState == Player.STATE_READY && p.playWhenReady && frames >= 0) {
                 if (frames == lastFrames) stuck++ else stuck = 0
@@ -654,12 +703,13 @@ class MainActivity : Activity() {
         main.removeCallbacks(shiftTick); main.removeCallbacks(shiftGo)
         if (from > 0L) { main.postDelayed(shiftTick, 1000); if (shiftProgsFor != i) loadShiftProgs(i) }
         if (testStream == null && !preview) prefs.last = l.keyOf(i)
-        say("")
+        if (!again) say("")
         if (!preview && !browsing && !page.isOpen) showInfo()
         setTunnel(prefs.hardwareSync && i !in noTunnel)
         firstPicture = false
         formatLine = ""
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
+        waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) gaveUp = false
         playGen++
         startedAt = SystemClock.elapsedRealtime()
         Log.i(tag, "play #${i + 1}" + (if (tunnel) " (hardware sync)" else "") + (if (from > 0L) " (recording, ${(System.currentTimeMillis() - from) / 60000} min back)" else "") +
@@ -705,6 +755,7 @@ class MainActivity : Activity() {
         }
         override fun onRenderedFirstFrame() {
             shade.visibility = View.GONE
+            if (!sleepWarned) say("")
             firstPicture = true
             Log.i(tag, "#${current + 1} first picture after ${SystemClock.elapsedRealtime() - startedAt} ms")
         }
@@ -739,13 +790,21 @@ class MainActivity : Activity() {
         override fun onCues(cueGroup: CueGroup) { cues.show(cueGroup.cues) }
         override fun onPlayerError(e: PlaybackException) {
             // (the message may hold the stream's address: only the kind of error is logged)
-            Log.w(tag, "#${current + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})" + (if (retries < 2) ", trying again" else ""))
+            // what the server answered and to which kind of request (the list of pieces, or a piece), without the address
+            val http = (e.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.let { x ->
+                val path = x.dataSpec.uri.path.orEmpty()
+                " HTTP ${x.responseCode} for " + (if (path.endsWith(".m3u8") || path.endsWith(".m3u")) "the list" else "a piece") + " at byte ${x.dataSpec.position}"
+            }.orEmpty()
+            Log.w(tag, "#${current + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})$http" + (if (retries < (if (e.errorCode in 2000..2999) 5 else 2)) ", trying again" else ""))
             // a decoder that stumbles while channels are changed, or a live stream that moved on, plays at the next try;
             // the second try is without the hardware keeping step, in case that is what it stumbles over
-            if (retries < 2) {
+            // (a server or a network that does not answer gets more tries, further apart, and the screen says what goes on)
+            val net = e.errorCode in 2000..2999
+            if (retries < (if (net) 5 else 2)) {
                 retries++
                 if (retries == 2 && tunnel) noTunnel.add(current)
-                main.postDelayed({ play(current, true, browsing) }, 300L * retries)
+                if (net && retries >= 2) { shade.visibility = View.VISIBLE; say("The channel's server is not answering.\nTrying again \u2026") }
+                main.postDelayed({ play(current, true, browsing) }, if (net) 1200L * retries else 300L * retries)
                 return
             }
             // (the last picture of the channel before would stay under the words)
