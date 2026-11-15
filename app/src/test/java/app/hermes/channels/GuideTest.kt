@@ -17,6 +17,8 @@ class GuideTest {
     @Test fun blocksAreRead() {
         val (id, p) = Guide.progOf("<programme start=\"20261107231300 +0300\" stop=\"20261108010000 +0300\" channel=\"8900\">\n\t<title lang=\"ru\">Tom &amp; Jerry</title>\n</programme>")!!
         assertEquals("8900", id); assertEquals("Tom & Jerry", p.title); assertEquals(107 * 60_000L, p.stop - p.start)
+        assertEquals("", p.desc)
+        assertEquals("A cat & a mouse.", Guide.progOf("<programme start=\"20261107231300 +0300\" stop=\"20261108010000 +0300\" channel=\"1\"><title>T</title><desc lang=\"en\">A cat &amp; a mouse.</desc></programme>")!!.second.desc)
         assertNull(Guide.progOf("<programme start=\"x\" stop=\"y\" channel=\"1\"><title>t</title></programme>"))
         val c = Guide.chanOf("<channel id=\"8900\">\n\t<display-name lang=\"ru\">Cinema HD</display-name>\n\t<display-name>Cinema</display-name>\n\t<icon src=\"http://g.example/8900.png\" />\n</channel>")!!
         assertEquals(listOf("Cinema HD", "Cinema"), c.names); assertEquals("http://g.example/8900.png", c.icon)

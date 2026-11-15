@@ -63,11 +63,21 @@ object Repo {
     private fun listFile(ctx: Context) = File(ctx.filesDir, "playlist.m3u")
     private fun extraFile(ctx: Context) = File(ctx.filesDir, "extra.m3u")
     private fun chanFile(ctx: Context) = File(ctx.filesDir, "guide-channels.tsv")
-    private fun progFile(ctx: Context) = File(ctx.filesDir, "guide.tsv")
+    private fun progFile(ctx: Context) = File(ctx.filesDir, "guide2.tsv")
+
+    // ---- figures for the settings
+    @Volatile var covered = 0
+        private set
+    fun listTime(ctx: Context): Long = listFile(ctx.applicationContext).let { if (it.exists()) it.lastModified() else 0L }
+    fun guideTime(ctx: Context): Long = progFile(ctx.applicationContext).let { if (it.exists()) it.lastModified() else 0L }
+    val guideLink: String get() = guideUrl
+    val working: Boolean get() = busy
 
     /** a new playlist link was given: what was kept of the old one goes */
     fun forget(ctx: Context) {
         listFile(ctx).delete(); extraFile(ctx).delete(); chanFile(ctx).delete(); progFile(ctx).delete()
+        File(ctx.filesDir, "guide.tsv").delete()            // (the file of an earlier version)
+        covered = 0
         lib = null; gids = emptyArray(); icons = emptyMap(); soon = emptyMap(); error = ""
     }
 
@@ -130,6 +140,7 @@ object Repo {
         if (cf.exists() && pf.exists()) { index(app, l); loadSoon(app); main.post(changed) }
         if (force || !cf.exists() || !pf.exists() || System.currentTimeMillis() - pf.lastModified() > FRESH_MS) {
             guideNote = "Reading the guide"
+            File(app.filesDir, "guide.tsv").delete()            // (the file of an earlier version, without descriptions)
             main.post(changed)
             val tc = File(app.filesDir, "guide-channels.tmp"); val tp = File(app.filesDir, "guide.tmp")
             try {
@@ -144,7 +155,7 @@ object Repo {
                             Guide.chanOf(b)?.let { c -> wc.write(c.id + "\t" + c.icon + "\t" + c.names.joinToString("\t") { it.replace('\t', ' ') } + "\n"); chans++ }
                         }, { b ->
                             Guide.progOf(b)?.let { (id, p) ->
-                                if (p.stop > now - 3600_000 && p.start < now + WINDOW_MS) { wp.write(id + "\t" + p.start + "\t" + p.stop + "\t" + p.title.replace('\t', ' ').replace('\n', ' ') + "\n"); progs++ }
+                                if (p.stop > now - 3600_000 && p.start < now + WINDOW_MS) { wp.write(id + "\t" + p.start + "\t" + p.stop + "\t" + p.title.replace('\t', ' ').replace('\n', ' ') + "\t" + p.desc.take(600).replace('\t', ' ').replace('\n', ' ') + "\n"); progs++ }
                             }
                         })
                         input.use { s ->
@@ -187,7 +198,7 @@ object Repo {
             g[i] = if (c.tvgId.isNotEmpty() && c.tvgId in ids) c.tvgId else names[M3u.norm(c.name)]
             if (g[i] != null) n++
         }
-        icons = ic; gids = g
+        icons = ic; gids = g; covered = n
         if (ids.isNotEmpty()) Log.i(TAG, "guide covers $n of ${l.channels.size} channels")
     }
 
@@ -201,7 +212,7 @@ object Repo {
                 for (line in lines) {
                     val a = line.indexOf('\t')
                     if (a <= 0 || line.substring(0, a) !in want) continue
-                    val f = line.split('\t', limit = 4)
+                    val f = line.split('\t', limit = 5)
                     if (f.size < 4) continue
                     val start = f[1].toLongOrNull() ?: continue; val stop = f[2].toLongOrNull() ?: continue
                     if (stop > now && start < now + SOON_MS) out.getOrPut(f[0]) { ArrayList() }.add(Guide.Prog(start, stop, f[3]))
@@ -234,8 +245,8 @@ object Repo {
             progFile(ctx.applicationContext).bufferedReader().useLines { lines ->
                 for (line in lines) {
                     if (!line.startsWith(id) || line.getOrNull(id.length) != '\t') continue
-                    val f = line.split('\t', limit = 4)
-                    if (f.size == 4) out.add(Guide.Prog(f[1].toLongOrNull() ?: continue, f[2].toLongOrNull() ?: continue, f[3]))
+                    val f = line.split('\t', limit = 5)
+                    if (f.size >= 4) out.add(Guide.Prog(f[1].toLongOrNull() ?: continue, f[2].toLongOrNull() ?: continue, f[3], f.getOrNull(4).orEmpty()))
                 }
             }
         } catch (_: Exception) {}

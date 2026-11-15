@@ -3,7 +3,7 @@ package app.hermes.channels.core
 /** Reading a programme guide (XMLTV) of any size, piece by piece, and asking it what is on. Plain Kotlin. */
 object Guide {
 
-    class Prog(val start: Long, val stop: Long, val title: String)
+    class Prog(val start: Long, val stop: Long, val title: String, /** what it is about, "" when the guide does not say */ val desc: String = "")
     /** a channel of the guide: its id, its logo and the names it is known by */
     class Chan(val id: String, val icon: String, val names: List<String>)
 
@@ -35,6 +35,7 @@ object Guide {
         if (s.indexOf('&') < 0) s else s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&#39;", "'").replace("&amp;", "&")
 
     private val titleTag = Regex("""<title[^>]*>([^<]*)</title>""")
+    private val descTag = Regex("""<desc[^>]*>([^<]*)</desc>""")
     private val displayName = Regex("""<display-name[^>]*>([^<]*)</display-name>""")
     private val iconTag = Regex("""<icon[^>]*\ssrc="([^"]*)"""")
 
@@ -57,7 +58,8 @@ object Guide {
         val stop = xmltvTime(attrOf(head, "stop"))
         val title = titleTag.find(block)?.groupValues?.get(1)?.trim().orEmpty()
         if (ch.isEmpty() || start == 0L || stop <= start || title.isEmpty()) return null
-        return ch to Prog(start, stop, unescape(title))
+        val desc = descTag.find(block)?.groupValues?.get(1)?.trim().orEmpty()
+        return ch to Prog(start, stop, unescape(title), unescape(desc))
     }
 
     /** a "<channel ...>...</channel>" block, or null */

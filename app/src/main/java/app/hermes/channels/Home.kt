@@ -44,7 +44,7 @@ object Home {
                 }
                 // (the provider takes no "where": the row's programmes are addressed through the channel)
                 cr.delete(PROGRAMS.buildUpon().appendQueryParameter("channel", id.toString()).build(), null, null)
-                val values = rows.take(15).mapIndexedNotNull { i, line ->
+                val values = (if (prefs.homeRow) rows else emptyList()).take(15).mapIndexedNotNull { i, line ->
                     val f = line.split('\t')
                     if (f.size < 2) null else ContentValues().apply {
                         put("channel_id", id)

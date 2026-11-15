@@ -23,5 +23,20 @@ class Prefs(ctx: Context) {
     var scope: String get() = str("scope"); set(v) = put("scope", v)
     /** what the TV's home screen is given: key, name, logo per line (so it can be given again without the playlist) */
     var homeRows: List<String> get() = lines("homeRows"); set(v) = put("homeRows", v.joinToString("\n"))
+    private fun flag(k: String, d: Boolean) = p.getBoolean(k, d)
+    private fun put(k: String, v: Boolean) = p.edit().putBoolean(k, v).apply()
+
+    /** picture and sound are kept in step by the device's own video hardware ("tunneled" playback); off unless chosen:
+     *  on the box it was built on, a 4K channel showed one picture and stopped that way */
+    var hardwareSync: Boolean get() = flag("hardwareSync2", false); set(v) = put("hardwareSync2", v)
+    /** the screen is switched to the channel's frame rate (50 or 60 a second), so that motion is even */
+    var matchRate: Boolean get() = flag("matchRate", true); set(v) = put("matchRate", v)
+    /** how much later (+) or earlier (-) the sound is played against the picture, in milliseconds (not with hardwareSync) */
+    var soundDelay: Int get() = p.getInt("soundDelay", 0).coerceIn(-400, 400); set(v) { p.edit().putInt("soundDelay", v.coerceIn(-400, 400)).apply() }
+    /** Up on the remote is the next channel (false: the previous one) */
+    var upIsNext: Boolean get() = flag("upIsNext", true); set(v) = put("upIsNext", v)
+    /** the channels watched last are given to the TV's home screen */
+    var homeRow: Boolean get() = flag("homeRow", true); set(v) = put("homeRow", v)
+
     var homeChannel: Long get() = p.getLong("homeChannel", 0L); set(v) { p.edit().putLong("homeChannel", v).apply() }
 }
