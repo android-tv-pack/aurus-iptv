@@ -32,7 +32,10 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Format
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -65,6 +68,7 @@ import java.util.Locale
  *    small window on the right, with what it shows now (and what that is about) and later below it.
  *    OK watches it full-screen, Back returns to the channel that was on. Holding OK makes a favourite.
  *  - Right: the programmes of the channel that plays
+ *  - hold OK: the bar with sound, subtitles and picture size; Left / Right choose one, OK steps it
  *  - number keys: the channel with that number;  INFO: what plays now and next;  MENU: the settings
  *
  * The playlist link holds the subscription key: it stays in the app's private storage and is never logged;
@@ -78,6 +82,7 @@ class MainActivity : Activity() {
     private lateinit var ui: Ui
     private lateinit var root: FrameLayout
     private lateinit var surface: SurfaceView
+    private lateinit var cues: CueView
     private lateinit var note: TextView
     private var player: ExoPlayer? = null
     private var selector: DefaultTrackSelector? = null
@@ -134,6 +139,8 @@ class MainActivity : Activity() {
         root.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
         surface = SurfaceView(this)
         root.addView(surface, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
+        cues = CueView(this)
+        root.addView(cues, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         buildInfo()
         buildBrowse()
         buildGuide()
@@ -202,6 +209,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         main.removeCallbacksAndMessages(null)
+        closeOptions()
         if (browsing) closeBrowse(false)
         player?.release()
         player = null
@@ -273,6 +281,8 @@ class MainActivity : Activity() {
      */
     private class Align {
         var refIsVideo: Boolean? = null
+        /** the piece of the stream the two above were noted in */
+        var piece: Any? = null
         var refTime = -1L
         var decided = false
         var moveVideo = false
@@ -283,15 +293,27 @@ class MainActivity : Activity() {
 
     }
     private var align = Align()
+    /** the channel that plays is read the careful way ([Pieces]); the others are read the player's usual way */
+    private var mending = false
+    /** channels whose picture stopped and that were therefore tried the careful way, in this run */
+    private val tryMend = HashSet<Int>()
+    @Volatile private var playKey = ""
     /** the sound's own times are not to be trusted on the channel that plays: it is timed by its length instead */
     @Volatile private var steadySound = false
 
     /** reads the stream's pieces as usual, and puts picture and sound on one clock where a channel needs it ([Align]) */
     private inner class Pieces(private val al: Align) : androidx.media3.exoplayer.hls.HlsExtractorFactory {
         private val usual = DefaultHlsExtractorFactory(tsFlags, true)
+        // (subtitles: handled exactly as the usual factory is told to handle them)
+        private var parser: androidx.media3.extractor.text.SubtitleParser.Factory = androidx.media3.extractor.text.DefaultSubtitleParserFactory()
+        private var parse = true
+        override fun setSubtitleParserFactory(f: androidx.media3.extractor.text.SubtitleParser.Factory): androidx.media3.exoplayer.hls.HlsExtractorFactory { parser = f; usual.setSubtitleParserFactory(f); return this }
+        override fun experimentalParseSubtitlesDuringExtraction(on: Boolean): androidx.media3.exoplayer.hls.HlsExtractorFactory { parse = on; usual.experimentalParseSubtitlesDuringExtraction(on); return this }
+        override fun getOutputTextFormat(f: Format): Format = usual.getOutputTextFormat(f)
         override fun createExtractor(uri: Uri, format: androidx.media3.common.Format, muxedCaptionFormats: MutableList<androidx.media3.common.Format>?,
                                      timestampAdjuster: androidx.media3.common.util.TimestampAdjuster, responseHeaders: MutableMap<String, MutableList<String>>,
                                      sniffingExtractorInput: androidx.media3.extractor.ExtractorInput, playerId: androidx.media3.exoplayer.analytics.PlayerId): androidx.media3.exoplayer.hls.HlsMediaChunkExtractor {
+            val piece = Any()
             val readers = object : androidx.media3.extractor.ts.TsPayloadReader.Factory {
                 val d = DefaultTsPayloadReaderFactory(tsFlags)
                 override fun createInitialPayloadReaders() = d.createInitialPayloadReaders()
@@ -313,6 +335,9 @@ class MainActivity : Activity() {
                                     val shown = Stamp.read(a, p + 9)
                                     val t = if (both) Stamp.read(a, p + 14) else shown
                                     if (!al.decided) {
+                                        // (only within one piece of the stream: where sound comes in pieces of its own, the two
+                                        // are fetched for different moments, and their times say nothing about each other)
+                                        if (al.piece !== piece) { al.piece = piece; al.refIsVideo = null }
                                         if (al.refIsVideo == null) al.refIsVideo = isVideo
                                         if (al.refIsVideo == isVideo) al.refTime = t
                                         else {
@@ -321,6 +346,8 @@ class MainActivity : Activity() {
                                             if (kotlin.math.abs(diff) > 5 * 90000L) {
                                                 al.delta = diff; al.moveVideo = isVideo
                                                 steadySound = true
+                                                val k = playKey
+                                                main.post { prefs.addMended(k) }
                                                 Log.i(tag, "#${current + 1} picture and sound are sent ${kotlin.math.abs(diff) / 90000} s apart: put on one clock")
                                             }
                                         }
@@ -340,8 +367,9 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            @Suppress("DEPRECATION")
-            val ts = androidx.media3.extractor.ts.TsExtractor(androidx.media3.extractor.ts.TsExtractor.MODE_HLS, timestampAdjuster, readers)
+            val ts = androidx.media3.extractor.ts.TsExtractor(androidx.media3.extractor.ts.TsExtractor.MODE_HLS,
+                if (parse) 0 else androidx.media3.extractor.ts.TsExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA, parser, timestampAdjuster, readers,
+                androidx.media3.extractor.ts.TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES)
             val isTs = try { ts.sniff(sniffingExtractorInput) } catch (_: java.io.EOFException) { false } finally { sniffingExtractorInput.resetPeekPosition() }
             return if (isTs) androidx.media3.exoplayer.hls.BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster)
             else usual.createExtractor(uri, format, muxedCaptionFormats, timestampAdjuster, responseHeaders, sniffingExtractorInput, playerId)
@@ -351,7 +379,7 @@ class MainActivity : Activity() {
     private fun source(address: String): MediaSource {
         val item = MediaItem.fromUri(address)
         return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
-            HlsMediaSource.Factory(http).setExtractorFactory(Pieces(align)).createMediaSource(item)
+            HlsMediaSource.Factory(http).setExtractorFactory(if (mending && "stock" !in trial) Pieces(align) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
         else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).createMediaSource(item)
     }
 
@@ -410,7 +438,9 @@ class MainActivity : Activity() {
         val sel = DefaultTrackSelector(this)
         tunnel = prefs.hardwareSync
         sel.setParameters(sel.buildUponParameters().setTunnelingEnabled(tunnel)
-            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, "nosound" in trial).setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, "nopicture" in trial))
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, "nosound" in trial).setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, "nopicture" in trial)
+            .setPreferredAudioLanguage(prefs.audioLang.ifEmpty { null }).setPreferredTextLanguage(prefs.subLang.ifEmpty { null })
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty()))
         val p = ExoPlayer.Builder(this, Renderers(this)).setTrackSelector(sel).build()
         p.setVideoSurfaceView(surface)
         p.addListener(listener)
@@ -475,6 +505,12 @@ class MainActivity : Activity() {
                 if (tunnel && stuck >= 4) {
                     Log.w(tag, "#${current + 1} the picture stopped with hardware sync: standard way")
                     noTunnel.add(current)
+                    play(current, true, browsing)
+                    return
+                }
+                if (!tunnel && stuck >= 4 && !mending && current !in tryMend) {
+                    Log.w(tag, "#${current + 1} the picture stopped while the sound goes on: reading the stream the careful way")
+                    tryMend.add(current)
                     play(current, true, browsing)
                     return
                 }
@@ -575,6 +611,14 @@ class MainActivity : Activity() {
         main.removeCallbacks(watched); if (!preview) main.postDelayed(watched, 30_000)
         align = Align()
         steadySound = false
+        playKey = if (testStream == null) l.keyOf(i) else ""
+        mending = "mend" in trial || i in tryMend || playKey in prefs.mended
+        // a choice of sound or subtitles made on the channel before does not fit this one's tracks: the languages chosen last decide
+        selector?.let { it.setParameters(it.buildUponParameters().clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty())) }
+        cues.show(emptyList())
+        pictureMode = prefs.picture(l.keyOf(i))
+        placeSurface()
         p.setMediaSource(source(c.url))
         p.prepare()
         p.playWhenReady = true
@@ -618,8 +662,12 @@ class MainActivity : Activity() {
                 else if (g.type == C.TRACK_TYPE_AUDIO && kind != null) parts += kind
             }
             formatLine = parts.joinToString("  ·  ")
+            val sounds = tracks(C.TRACK_TYPE_AUDIO).size; val subs = tracks(C.TRACK_TYPE_TEXT).size
+            if (sounds > 1 || subs > 0) Log.i(tag, "#${current + 1} tracks: $sounds sound, $subs subtitles")
+            if (optionsOpen) refreshChips()
             page.refresh()
         }
+        override fun onCues(cueGroup: CueGroup) { cues.show(cueGroup.cues) }
         override fun onPlayerError(e: PlaybackException) {
             // (the message may hold the stream's address: only the kind of error is logged)
             Log.w(tag, "#${current + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})" + (if (retries < 2) ", trying again" else ""))
@@ -637,19 +685,33 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- where the picture is
 
-    /** the whole screen, or the small window of the channel list; the picture keeps its shape inside it */
+    /** the picture's size on the channel that plays, see [PICTURE] */
+    private var pictureMode = 0
+
+    /** the whole screen, or the small window of the channel list (there the picture always keeps its shape) */
     private fun placeSurface() {
         val dm = resources.displayMetrics
         val boxX: Int; val boxY: Int; val boxW: Int; val boxH: Int
         if (browsing) { boxX = u(MINI_X); boxY = u(MINI_Y); boxW = u(MINI_W); boxH = u(MINI_W) * 9 / 16 }
         else { boxX = 0; boxY = 0; boxW = dm.widthPixels; boxH = dm.heightPixels }
-        var w = boxW; var h = (boxW / videoAspect).toInt()
-        if (h > boxH) { h = boxH; w = (boxH * videoAspect).toInt() }
+        val mode = if (browsing) 0 else pictureMode
+        val shape = when (mode) { 3 -> 16f / 9f; 4 -> 4f / 3f; else -> videoAspect }
+        var w = boxW; var h = (boxW / shape).toInt()
+        when (mode) {
+            2 -> h = boxH                                                                  // stretched over the screen
+            1 -> if (h < boxH) { h = boxH; w = (boxH * shape).toInt() }                    // fills the screen, its edges are cut
+            else -> if (h > boxH) { h = boxH; w = (boxH * shape).toInt() }                 // all of it, with bars where it does not reach
+        }
         val lp = surface.layoutParams as FrameLayout.LayoutParams
         lp.width = w; lp.height = h
         lp.leftMargin = boxX + (boxW - w) / 2
         lp.topMargin = boxY + (boxH - h) / 2
         surface.layoutParams = lp
+        // subtitles lie over the part of the picture that is on the screen
+        val cp = cues.layoutParams as FrameLayout.LayoutParams
+        cp.width = minOf(w, boxW); cp.height = minOf(h, boxH)
+        cp.leftMargin = maxOf(lp.leftMargin, boxX); cp.topMargin = maxOf(lp.topMargin, boxY)
+        cues.layoutParams = cp
     }
 
     // ---------------------------------------------------------------- what plays (the bar at the bottom)
@@ -660,15 +722,24 @@ class MainActivity : Activity() {
     private lateinit var infoNow: TextView
     private lateinit var infoNext: TextView
     private lateinit var infoClock: TextView
+    private lateinit var infoTimes: LinearLayout
+    private lateinit var infoStart: TextView
+    private lateinit var infoStop: TextView
+    private lateinit var infoLeft: TextView
     private lateinit var infoProg: Bar
-    private val hideInfo = Runnable { infoBar.animate().alpha(0f).setDuration(350).start() }
+    private lateinit var infoHint: TextView
+    private lateinit var chipRow: LinearLayout
+    private val chips = ArrayList<TextView>()
+    /** the bar is up with its three choices (sound, subtitles, picture size) to step through */
+    private var optionsOpen = false
+    private val hideInfo = Runnable { if (optionsOpen) closeOptions() else infoBar.animate().alpha(0f).setDuration(350).start() }
 
     private fun buildInfo() {
         infoBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(235, 6, 9, 18), Color.argb(170, 6, 9, 18), Color.TRANSPARENT))
-            setPadding(u(44), u(46), u(44), u(26))
+            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(240, 6, 9, 18), Color.argb(185, 6, 9, 18), Color.TRANSPARENT))
+            setPadding(u(44), u(52), u(44), u(24))
             alpha = 0f
         }
         infoLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
@@ -676,12 +747,41 @@ class MainActivity : Activity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         infoName = ui.label(19f, Color.WHITE, true)
         infoNow = ui.label(13.5f, white(235))
-        infoProg = Bar(this)
-        infoNext = ui.label(11.5f, white(160))
         col.addView(infoName)
         col.addView(infoNow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(2) })
-        col.addView(infoProg, LinearLayout.LayoutParams(u(360), maxOf(3, u(2.5f))).apply { topMargin = u(6) })
+        // how far the programme has run: when it began, the bar, when the next one begins, how long that is from now
+        infoTimes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        infoStart = ui.label(11f, white(170))
+        infoProg = Bar(this)
+        infoStop = ui.label(11f, white(170))
+        infoLeft = ui.label(11f, accent, true)
+        infoTimes.addView(infoStart)
+        infoTimes.addView(infoProg, LinearLayout.LayoutParams(u(330), maxOf(4, u(3))).apply { leftMargin = u(9); rightMargin = u(9) })
+        infoTimes.addView(infoStop)
+        infoTimes.addView(infoLeft, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(14) })
+        col.addView(infoTimes, LinearLayout.LayoutParams(-2, -2).apply { topMargin = u(5) })
+        infoNext = ui.label(11.5f, white(160))
         col.addView(infoNext, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
+        infoHint = ui.label(10f, white(105)).apply { text = "Hold OK   sound, subtitles, picture size" }
+        col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
+        chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
+        for (i in 0..2) {
+            val t = ui.label(12f, Color.WHITE, true).apply {
+                isFocusable = true
+                isClickable = true
+                setPadding(u(13), u(5.5f), u(13), u(6))
+            }
+            fun paint(has: Boolean) {
+                t.setTextColor(if (has) ui.ink else white(225))
+                t.background = if (has) ui.rounded(accent, u(14)) else ui.rounded(white(22), u(14), u(1), white(40))
+            }
+            paint(false)
+            t.setOnFocusChangeListener { _, has -> paint(has) }
+            t.setOnClickListener { step(i); refreshChips(); main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000) }
+            chips += t
+            chipRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = u(8) })
+        }
+        col.addView(chipRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = u(9) })
         infoBar.addView(col, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(18) })
         infoClock = ui.label(22f, white(235)).apply { typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) }
         infoBar.addView(infoClock)
@@ -695,16 +795,131 @@ class MainActivity : Activity() {
         infoName.text = "${current + 1}   ${c.name}"
         Images.show(Repo.logo(current), infoLogo, u(58))
         val (cur, next) = Repo.nowNext(current, now)
-        infoNow.text = if (cur != null) cur.title + "    " + hm(cur.start) + " \u2013 " + hm(cur.stop) else c.group
-        infoProg.f = if (cur != null) Guide.progress(cur, now) else -1f
+        infoNow.text = cur?.title ?: c.group
+        infoTimes.visibility = if (cur != null) View.VISIBLE else View.GONE
+        if (cur != null) {
+            infoStart.text = hm(cur.start); infoStop.text = hm(cur.stop)
+            infoProg.f = Guide.progress(cur, now)
+            val min = ((cur.stop - now + 59_999) / 60_000).toInt()
+            infoLeft.text = when { min <= 0 -> ""; min < 60 -> "$min min left"; else -> "${min / 60} h ${min % 60} min left" }
+        }
         infoNext.text = if (next != null) "Next  " + hm(next.start) + "   " + next.title else ""
+        infoNext.visibility = if (next != null) View.VISIBLE else View.GONE
         infoClock.text = hm(now)
     }
 
     private fun showInfo(ms: Long = 5000) {
+        if (optionsOpen) { fillInfo(); return }
         fillInfo()
         infoBar.animate().cancel(); infoBar.alpha = 1f
         main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, ms)
+    }
+
+    // ---------------------------------------------------------------- sound, subtitles, picture size (hold OK while watching)
+
+    private class Track(val group: Tracks.Group, val index: Int, val format: Format, val selected: Boolean)
+
+    /** the tracks of one kind the channel has and this device can play */
+    private fun tracks(type: Int): List<Track> {
+        val out = ArrayList<Track>()
+        val t = player?.currentTracks ?: return out
+        for (g in t.groups) if (g.type == type) for (i in 0 until g.length) if (g.isTrackSupported(i)) out += Track(g, i, g.getTrackFormat(i), g.isTrackSelected(i))
+        return out
+    }
+
+    /** how a track reads: its language, the name the channel gives it, else its number */
+    private fun named(f: Format, n: Int): String {
+        val code = f.language.orEmpty()
+        val lang = if (code.isEmpty() || code == "und") "" else Locale.forLanguageTag(code).displayLanguage.replaceFirstChar { it.uppercase() }
+        val label = f.label.orEmpty()
+        return when {
+            label.isNotEmpty() && lang.isNotEmpty() && !label.equals(lang, true) -> "$lang ($label)"
+            label.isNotEmpty() -> label
+            lang.isNotEmpty() -> lang
+            else -> "Track $n"
+        }
+    }
+
+    private fun chipText(i: Int): String = when (i) {
+        0 -> {
+            val all = tracks(C.TRACK_TYPE_AUDIO)
+            val at = all.indexOfFirst { it.selected }
+            if (all.isEmpty() || at < 0) "Sound   \u2014" else {
+                val f = all[at].format
+                val kind = when (f.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> "" }
+                // (tracks that read alike, as two in one language do, are told apart by how they are coded)
+                val twin = all.any { it !== all[at] && named(it.format, 0) == named(f, 0) && it.format.channelCount == f.channelCount }
+                val coded = if (!twin) "" else when (f.sampleMimeType) {
+                    "audio/mp4a-latm" -> "AAC"; "audio/mpeg-L2" -> "MPEG"; "audio/mpeg" -> "MP3"; "audio/ac3" -> "Dolby Digital"; "audio/eac3" -> "Dolby Digital Plus"; else -> ""
+                }
+                "Sound   " + named(f, at + 1) + (if (kind.isNotEmpty()) " \u00B7 $kind" else "") + (if (coded.isNotEmpty()) " \u00B7 $coded" else "") + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "")
+            }
+        }
+        1 -> {
+            val all = tracks(C.TRACK_TYPE_TEXT)
+            val at = all.indexOfFirst { it.selected }
+            "Subtitles   " + when { all.isEmpty() -> "none on this channel"; at < 0 -> "Off"; else -> named(all[at].format, at + 1) + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "") }
+        }
+        else -> "Picture   " + PICTURE[pictureMode]
+    }
+
+    private fun refreshChips() { for ((i, c) in chips.withIndex()) c.text = chipText(i) }
+
+    /** OK on a choice goes to its next value */
+    private fun step(i: Int) {
+        val sel = selector ?: return
+        when (i) {
+            0 -> {
+                val all = tracks(C.TRACK_TYPE_AUDIO)
+                if (all.size < 2) return
+                val next = all[(all.indexOfFirst { it.selected } + 1) % all.size]
+                val lang = next.format.language.orEmpty()
+                if (testStream == null) prefs.audioLang = lang
+                sel.setParameters(sel.buildUponParameters().setOverrideForType(TrackSelectionOverride(next.group.mediaTrackGroup, next.index)).setPreferredAudioLanguage(lang.ifEmpty { null }))
+            }
+            1 -> {
+                val all = tracks(C.TRACK_TYPE_TEXT)
+                if (all.isEmpty()) return
+                val at = all.indexOfFirst { it.selected } + 1
+                if (at >= all.size) {
+                    if (testStream == null) prefs.subLang = ""
+                    sel.setParameters(sel.buildUponParameters().clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).setPreferredTextLanguage(null))
+                    cues.show(emptyList())
+                } else {
+                    val next = all[at]
+                    val lang = next.format.language.orEmpty().ifEmpty { "und" }
+                    if (testStream == null) prefs.subLang = lang
+                    sel.setParameters(sel.buildUponParameters().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .setOverrideForType(TrackSelectionOverride(next.group.mediaTrackGroup, next.index)).setPreferredTextLanguage(lang))
+                }
+            }
+            else -> {
+                pictureMode = (pictureMode + 1) % PICTURE.size
+                lib?.let { if (testStream == null && current >= 0) prefs.setPicture(it.keyOf(current), pictureMode) }
+                placeSurface()
+            }
+        }
+    }
+
+    private fun openOptions() {
+        if (lib == null || current < 0 || optionsOpen) return
+        optionsOpen = true
+        fillInfo()
+        refreshChips()
+        infoHint.visibility = View.GONE
+        chipRow.visibility = View.VISIBLE
+        infoBar.animate().cancel(); infoBar.alpha = 1f
+        chips[0].requestFocus()
+        main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000)
+    }
+
+    private fun closeOptions() {
+        if (!optionsOpen) return
+        optionsOpen = false
+        main.removeCallbacks(hideInfo)
+        chipRow.visibility = View.GONE
+        infoHint.visibility = View.VISIBLE
+        infoBar.animate().alpha(0f).setDuration(250).start()
     }
 
     // ---------------------------------------------------------------- the channel window
@@ -1227,6 +1442,13 @@ class MainActivity : Activity() {
             if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU) { page.close(); return true }
             return super.onKeyDown(keyCode, event)
         }
+        if (optionsOpen) {
+            main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000)
+            if (keyCode == KeyEvent.KEYCODE_BACK) { closeOptions(); return true }
+            // (Left and Right walk the three choices, OK steps the one in focus; the channel stays)
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return true
+            return super.onKeyDown(keyCode, event)
+        }
         if (browsing) {
             if (keyCode == KeyEvent.KEYCODE_BACK) { closeBrowse(true); return true }
             if (keyCode == KeyEvent.KEYCODE_MENU) { openSettings(); return true }
@@ -1245,7 +1467,10 @@ class MainActivity : Activity() {
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_MEDIA_NEXT -> { zap(1); return true }
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { zap(-1); return true }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_LEFT -> { openBrowse(); return true }
+            // OK: let go at once = the channels, held = sound, subtitles, picture size
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { if (event.repeatCount == 0) event.startTracking(); return true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> { openBrowse(); return true }
+            KeyEvent.KEYCODE_CAPTIONS, KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK -> { openOptions(); return true }
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> { if (testStream == null) openSettings(); return true }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_GUIDE -> { if (lib != null && current >= 0 && testStream == null) showGuide(current); return true }
             KeyEvent.KEYCODE_INFO -> { if (infoBar.alpha > 0f) { main.removeCallbacks(hideInfo); hideInfo.run() } else showInfo(8000); return true }
@@ -1254,7 +1479,21 @@ class MainActivity : Activity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    private fun watching() = !page.isOpen && !browsing && !optionsOpen && guideBox.visibility != View.VISIBLE
+
+    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
+        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) && watching()) { openOptions(); return true }
+        return super.onKeyLongPress(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) && event.isTracking && !event.isCanceled && watching()) { openBrowse(); return true }
+        return super.onKeyUp(keyCode, event)
+    }
+
     private companion object {
+        /** the picture's sizes, in the order OK steps through them */
+        val PICTURE = arrayOf("As sent", "Fill the screen", "Stretch", "16:9", "4:3")
         // the channel window, in screen units (the screen is 960 wide): lists, channels, then the picture's small window
         const val SIDE_PAD = 22
         const val GROUPS_W = 150

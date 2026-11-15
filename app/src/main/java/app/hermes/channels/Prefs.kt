@@ -38,5 +38,20 @@ class Prefs(ctx: Context) {
     /** the channels watched last are given to the TV's home screen */
     var homeRow: Boolean get() = flag("homeRow", true); set(v) = put("homeRow", v)
 
+    /** the language of the sound chosen last ("" = whatever the channel plays first); used on every channel that has it */
+    var audioLang: String get() = str("audioLang"); set(v) = put("audioLang", v)
+    /** the language of the subtitles chosen last; "" = subtitles are off */
+    var subLang: String get() = str("subLang"); set(v) = put("subLang", v)
+    /** the picture's size, for the channels where it was changed (see MainActivity.PICTURE); 0 = as the channel sends it */
+    fun picture(key: String): Int = lines("pictures").firstOrNull { it.startsWith("$key\t") }?.substringAfter('\t')?.toIntOrNull() ?: 0
+    fun setPicture(key: String, mode: Int) {
+        val rest = lines("pictures").filter { !it.startsWith("$key\t") }
+        put("pictures", (if (mode == 0) rest else (rest + "$key\t$mode")).takeLast(300).joinToString("\n"))
+    }
+
+    /** channels whose stream is sent with picture and sound on different clocks: they are read the careful way from the start */
+    val mended: Set<String> get() = lines("mended").toSet()
+    fun addMended(key: String) { if (key.isNotEmpty() && key !in mended) put("mended", (lines("mended") + key).takeLast(200).joinToString("\n")) }
+
     var homeChannel: Long get() = p.getLong("homeChannel", 0L); set(v) { p.edit().putLong("homeChannel", v).apply() }
 }
