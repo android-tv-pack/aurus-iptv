@@ -173,7 +173,7 @@ class MainActivity : Activity() {
         digits = ui.label(40f, Color.WHITE, true).apply { setShadowLayer(u(6).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
         root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
         setContentView(root)
-        page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME)
+        page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME.removeSuffix("-beta") + (if (isBeta) "  \u00B7  BETA" else ""))
         takeDropped()
         favs = prefs.favs.toMutableSet()
         recents = prefs.recents
@@ -2204,7 +2204,7 @@ class MainActivity : Activity() {
                 "with no adverts, no account and no tracking. Your playlist link stays on this device.",
                 stats = { listOf("NETWORK USE" to "Only your playlist, its guide and logos, and the channels you watch") },
                 rows = listOf(
-                Page.Row("Version", "Aurus IPTV for Android TV", { BuildConfig.VERSION_NAME }, steps = false) {},
+                Page.Row("Version", if (isBeta) "A beta: still being tested, expect rough edges" else "Aurus IPTV for Android TV", { BuildConfig.VERSION_NAME }, steps = false) {},
                 Page.Row("Developer", "Android TV Pack", { DEVELOPER }, steps = false) {},
                 Page.Row("GitHub", "Source, new versions, reporting a fault", { GITHUB }, steps = false) {
                     // a TV box seldom has a browser: where there is none, the address is shown large enough to type into a phone
@@ -2319,6 +2319,8 @@ class MainActivity : Activity() {
         const val SETTLE_MS = 5000L
         /** how far a picture's time may come out of the decoder from the time that went in and still be taken for the same picture */
         const val NEAR_US = 14_500L
+        /** a build still being tested: its version name ends in "-beta" (dropping the ending makes it a release) */
+        val isBeta = BuildConfig.VERSION_NAME.endsWith("-beta")
         const val DEVELOPER = "aze038"
         const val GITHUB = "github.com/android-tv-pack/aurus-iptv"
         /** the picture's sizes, in the order OK steps through them */
