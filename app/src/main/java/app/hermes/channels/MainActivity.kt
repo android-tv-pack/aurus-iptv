@@ -141,6 +141,7 @@ class MainActivity : Activity() {
         ui = Ui(this)
         prefs = Prefs(this)
         if (Repo.source != prefs.source) Repo.switchTo(prefs.source)
+        prefs.migrateEpg()
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         // (the order matters: the backdrop of the channel window lies under the picture, its lists over it)
         backdrop = object : View(this) {
@@ -193,7 +194,7 @@ class MainActivity : Activity() {
         val list = take("playlist.txt")
         if (list.isNotEmpty()) { ensureSource(); prefs.playlist = list[0]; prefs.extra = list.getOrNull(1).orEmpty(); Repo.forget(this); Log.i(tag, "a playlist link was taken") }
         val guide = take("guide.txt")
-        if (guide.isNotEmpty()) { prefs.guide = guide[0]; Repo.forget(this); Log.i(tag, "a guide link was taken") }
+        if (guide.isNotEmpty()) { prefs.setEpgOf(prefs.source, prefs.addEpg(guide[0])); Repo.forgetGuide(this, prefs.source); Log.i(tag, "a guide link was taken") }
     }
 
     /** what the app was started for: a channel of the home screen's row, or (for testing) a number in the list or a stream */
@@ -1731,6 +1732,7 @@ class MainActivity : Activity() {
         if (id == prefs.source && Repo.lib != null) return
         prefs.source = id
         Repo.switchTo(id)
+        prefs.migrateEpg()
         favs = prefs.favs.toMutableSet()
         recents = prefs.recents
         scopeName = prefs.scope.ifEmpty { Library.ALL }
@@ -1777,6 +1779,72 @@ class MainActivity : Activity() {
 
     private lateinit var page: Page
 
+    private fun epgName(id: Int): String = if (id == 0) "From the playlist" else prefs.epgs.firstOrNull { it.first == id }?.second ?: "From the playlist"
+
+    /** playlist [source] takes its programmes from EPG [id] from now on (0: from the one it names itself) */
+    private fun useEpg(source: Int, id: Int) {
+        if (prefs.epgOf(source) == id) return
+        prefs.setEpgOf(source, id)
+        Repo.forgetGuide(this, source)
+        if (source == prefs.source) reload(false)
+    }
+
+    /** choosing where a playlist takes its programmes from */
+    private fun epgPicker(source: Int) {
+        val name = prefs.sources.firstOrNull { it.first == source }?.second ?: return
+        val now = prefs.epgOf(source)
+        val sh = Sheet(ui, "EPG of \u201C$name\u201D", "Where this playlist takes its programmes from." + (if (prefs.epgs.isEmpty()) " To use another EPG, add one in the settings under EPG." else ""))
+        sh.item("From the playlist", { if (now == 0) "\u2713" else "" }) { useEpg(source, 0); reopenSettings() }
+        for ((id, n, _) in prefs.epgs) sh.item(n, { if (now == id) "\u2713" else "" }) { useEpg(source, id); reopenSettings() }
+        sh.button("Close").show { if (page.isOpen) page.focus() }
+    }
+
+    private fun addEpg() {
+        val sh = Sheet(ui, "Add an EPG", "Paste or type the link of a programme guide in XMLTV form. It is saved as \u201CEPG ${prefs.epgs.size + 1}\u201D" +
+            (if (prefs.sources.isEmpty()) "." else " and used for the playlist you are watching; other playlists can be given it too."))
+        val e = sh.input("", "The link of the EPG (.xml or .xml.gz)", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        sh.button("Cancel").button("Add", primary = true) {
+            val v = e.text.toString().trim()
+            if (v.isEmpty()) return@button
+            val id = prefs.addEpg(v)
+            if (prefs.sources.isNotEmpty()) useEpg(prefs.source, id)
+            reopenSettings()
+        }.show { if (page.isOpen) page.focus() }
+    }
+
+    /** OK on a saved EPG in the settings: what can be done with it */
+    private fun epgSheet(id: Int) {
+        val (_, name, address) = prefs.epgs.firstOrNull { it.first == id } ?: return
+        val users = prefs.sources.filter { prefs.epgOf(it.first) == id }
+        val sh = Sheet(ui, name, (Uri.parse(address).host ?: "A saved EPG") + ". " + (if (users.isEmpty()) "No playlist uses it." else "Used by " + users.joinToString(", ") { it.second } + "."))
+        if (prefs.sources.isNotEmpty() && prefs.epgOf(prefs.source) != id) sh.item("Use for \u201C${prefs.sourceName}\u201D") { useEpg(prefs.source, id); reopenSettings() }
+        sh.item("Rename") {
+            val r = Sheet(ui, "Rename", "What this EPG is called in the lists.")
+            val e = r.input(name, "Name", InputType.TYPE_CLASS_TEXT)
+            r.button("Cancel").button("Save", primary = true) { prefs.renameEpg(id, e.text.toString()); reopenSettings() }.show { if (page.isOpen) page.focus() }
+        }
+        sh.item("Change the link") {
+            link("Link of \u201C$name\u201D", "The link of the programme guide in XMLTV form.", "The link of the EPG (.xml or .xml.gz)", address) { v ->
+                if (v.isEmpty() || v == address) return@link
+                prefs.setEpgLink(id, v)
+                // (every playlist that uses it reads it anew)
+                for ((sid, _) in users) Repo.forgetGuide(this, sid)
+                if (users.any { it.first == prefs.source }) reload(false)
+                reopenSettings()
+            }
+        }
+        sh.item("Remove") {
+            Sheet(ui, "Remove \u201C$name\u201D?", if (users.isEmpty()) "The EPG is forgotten." else "The EPG is forgotten. " + users.joinToString(", ") { it.second } + " then use" + (if (users.size == 1) "s" else "") + " the EPG the playlist names.")
+                .button("Keep", primary = true).button("Remove") {
+                    prefs.removeEpg(id)
+                    for ((sid, _) in users) Repo.forgetGuide(this, sid)
+                    if (users.any { it.first == prefs.source }) reload(false)
+                    reopenSettings()
+                }.show { if (page.isOpen) page.focus() }
+        }
+        sh.button("Close").show { if (page.isOpen) page.focus() }
+    }
+
     /** the settings are drawn again (the playlists listed in them changed) */
     private fun reopenSettings() { if (page.isOpen) { page.close(); openSettings() } }
 
@@ -1803,6 +1871,7 @@ class MainActivity : Activity() {
                 reopenSettings()
             }
         }
+        sh.item("EPG", { epgName(prefs.epgOf(id)) }) { epgPicker(id) }
         if (active) sh.item("Fetch it again", { if (Repo.working) "Working" else "" }) { reload(true) }
         sh.item("Remove") {
             Sheet(ui, "Remove \u201C$name\u201D?", "Its link, favourites, recent channels and EPG are forgotten on this device." + (if (prefs.sources.size > 1) " The other playlists stay." else ""))
@@ -1840,27 +1909,30 @@ class MainActivity : Activity() {
                     Page.Row(name, prefs.channelCount(id).let { if (it > 0) num(it) + " channels" else "Not read yet" }, { if (id == prefs.source) "\u2713  Watching" else "" }, steps = false) { playlistSheet(id) }
                 } + Page.Row("\uFF0B  Add a playlist", if (prefs.sources.isEmpty()) "Give the link of your playlist to start" else "Another provider's link, or a list of your own", { "" }, steps = false) { addSource() }
             ),
-            Page.Tab("EPG", "The EPG (electronic programme guide) tells what is on now and later. Most playlists name one, so there is usually nothing to set. " +
-                "It is read again by itself twice a day; a large one takes about a minute. These settings belong to the playlist that is watched.",
+            Page.Tab("EPG", "The EPG (electronic programme guide) tells what is on now and later. Most playlists name one of their own. You can also save EPGs here " +
+                "and choose, for each playlist, which one it takes its programmes from. An EPG is read again by itself twice a day; a large one takes about a minute.",
                 stats = {
                     val l = Repo.lib
-                    listOf("STATUS" to Repo.guideNote.ifEmpty { if (Repo.guideTime(this) > 0) "Ready" else if (Repo.working) "Reading the EPG" else "Not read yet" },
+                    listOf("PLAYLIST" to prefs.sourceName.ifEmpty { "\u2014" },
+                        "STATUS" to Repo.guideNote.ifEmpty { if (Repo.guideTime(this) > 0) "Ready" else if (Repo.working) "Reading the EPG" else "Not read yet" },
                         "CHANNELS WITH EPG" to (if (l == null) "\u2014" else num(Repo.covered) + " of " + num(l.channels.size)),
                         "CHANNELS WITH A LOGO" to (if (l == null) "\u2014" else num(l.channels.indices.count { Repo.logo(it).isNotEmpty() })),
                         "LAST READ" to stamp(Repo.guideTime(this)),
                         "FROM" to (Uri.parse(Repo.guideLink).host ?: "\u2014"))
                 }, rows = listOf(
-                Page.Row("EPG link", "XMLTV, .xml or .xml.gz", { if (prefs.guide.isEmpty()) "From the playlist" else "Your own" }, steps = false) {
-                    link("EPG link", "The link of a programme guide in XMLTV form. Leave empty to use the one your playlist names.",
-                        "The link of the EPG (.xml or .xml.gz)", prefs.guide) { v -> prefs.guide = v; Repo.forget(this); reload(true) }
-                },
-                Page.Row("Logos link", "Optional: a second list that gives channels their logos and EPG names", { if (prefs.extra.isEmpty()) "None" else "Set" }, steps = false) {
-                    link("Logos link", "Some providers' playlists carry no logos and do not say which EPG channel each one is. A second, public list (M3U) can supply both: " +
-                        "channels are matched by number, else by name. Leave empty for none.",
-                        "The link of the list with logos", prefs.extra) { v -> prefs.extra = v; Repo.forget(this); reload(true) }
-                },
-                Page.Row("Read the EPG again", "Also fetches the playlist again", { if (Repo.working) "Working" else "" }, steps = false) { reload(true) }
-            )),
+                    Page.Row("EPG of this playlist", "Where \u201C" + prefs.sourceName + "\u201D takes its programmes from", { epgName(prefs.epgOf(prefs.source)) }, { prefs.sources.isNotEmpty() }, steps = false) { epgPicker(prefs.source) }
+                ) + prefs.epgs.map { (id, name, link) ->
+                    Page.Row(name, Uri.parse(link).host ?: "Saved EPG", { if (prefs.epgOf(prefs.source) == id) "\u2713  In use" else "" }, steps = false) { epgSheet(id) }
+                } + listOf(
+                    Page.Row("\uFF0B  Add an EPG", "A link in XMLTV form (.xml or .xml.gz)", { "" }, steps = false) { addEpg() },
+                    Page.Row("Logos link", "Optional: a second list that gives this playlist's channels their logos and EPG names", { if (prefs.extra.isEmpty()) "None" else "Set" }, { prefs.sources.isNotEmpty() }, steps = false) {
+                        link("Logos link", "Some providers' playlists carry no logos and do not say which EPG channel each one is. A second, public list (M3U) can supply both: " +
+                            "channels are matched by number, else by name. Leave empty for none.",
+                            "The link of the list with logos", prefs.extra) { v -> prefs.extra = v; Repo.forget(this); reload(true) }
+                    },
+                    Page.Row("Read the EPG again", "Also fetches the playlist again", { if (Repo.working) "Working" else "" }, { prefs.sources.isNotEmpty() }, steps = false) { reload(true) }
+                )
+            ),
             Page.Tab("Playback", "Picture and sound are kept in step the standard way, where you can move the sound yourself, or by the box's own video hardware. " +
                 "A channel whose picture stops with the hardware is played the standard way by itself. With the refresh rate on Auto, the screen goes dark for a moment when it changes.",
                 stats = {

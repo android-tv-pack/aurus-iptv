@@ -36,7 +36,7 @@ class Prefs(ctx: Context) {
     fun removeSource(id: Int) {
         val rest = sources.filter { it.first != id }
         val e = p.edit()
-        if (id == 0) for (k in arrayOf("playlist", "extra", "guide", "favs", "recents", "last", "scope", "homeRows", "prev", "pictures", "mended", "count")) e.remove(k)
+        if (id == 0) for (k in arrayOf("playlist", "extra", "guide", "favs", "recents", "last", "scope", "homeRows", "prev", "pictures", "mended", "count", "epg")) e.remove(k)
         else for (k in p.all.keys) if (k.startsWith("s$id.")) e.remove(k)
         e.apply()
         putSources(rest)
@@ -48,6 +48,32 @@ class Prefs(ctx: Context) {
     var extra: String get() = str(pre + "extra"); set(v) = put(pre + "extra", v.trim())
     /** the programme guide (XMLTV); empty = the one the playlist names */
     var guide: String get() = str(pre + "guide"); set(v) = put(pre + "guide", v.trim())
+
+    // ---- the EPGs (programme guides): each a number, a name and a link; a playlist uses one of them, or the one it names itself
+    val epgs: List<Triple<Int, String, String>> get() = lines("epgs").mapNotNull { l ->
+        val f = l.split('\t')
+        val id = f.getOrNull(0)?.toIntOrNull()
+        if (id == null || f.size < 3) null else Triple(id, f[1], f[2])
+    }
+    private fun putEpgs(list: List<Triple<Int, String, String>>) = put("epgs", list.joinToString("\n") { "${it.first}\t${it.second.replace('\t', ' ').replace('\n', ' ')}\t${it.third.trim()}" })
+    /** a new EPG; returns its number (numbers start at 1: 0 stands for "the one the playlist names") */
+    fun addEpg(link: String, name: String = ""): Int {
+        val cur = epgs
+        val id = (cur.maxOfOrNull { it.first } ?: 0) + 1
+        putEpgs(cur + Triple(id, name.ifBlank { "EPG ${cur.size + 1}" }, link))
+        return id
+    }
+    fun renameEpg(id: Int, name: String) { if (name.isNotBlank()) putEpgs(epgs.map { if (it.first == id) Triple(id, name.trim(), it.third) else it }) }
+    fun setEpgLink(id: Int, link: String) { if (link.isNotBlank()) putEpgs(epgs.map { if (it.first == id) Triple(id, it.second, link) else it }) }
+    fun removeEpg(id: Int) = putEpgs(epgs.filter { it.first != id })
+    private fun preOf(source: Int) = if (source == 0) "" else "s$source."
+    /** which EPG playlist [source] uses; 0 = the one the playlist itself names (also when the one chosen was removed) */
+    fun epgOf(source: Int): Int = p.getInt(preOf(source) + "epg", 0).let { id -> if (epgs.any { it.first == id }) id else 0 }
+    fun setEpgOf(source: Int, id: Int) { p.edit().putInt(preOf(source) + "epg", id).apply() }
+    /** the link of the EPG the watched playlist uses; "" = the one the playlist names */
+    val guideLink: String get() = epgOf(source).let { id -> epgs.firstOrNull { it.first == id }?.third } ?: guide
+    /** (a link given to one playlist directly, as earlier versions kept it, becomes an EPG of its own) */
+    fun migrateEpg() { if (guide.isNotEmpty() && epgOf(source) == 0) { setEpgOf(source, addEpg(guide)); guide = "" } }
 
     var favs: Set<String> get() = lines(pre + "favs").toSet(); set(v) = put(pre + "favs", v.joinToString("\n"))
     var recents: List<String> get() = lines(pre + "recents"); set(v) = put(pre + "recents", v.joinToString("\n"))

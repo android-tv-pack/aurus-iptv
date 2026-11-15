@@ -94,6 +94,12 @@ object Repo {
     val guideLink: String get() = guideUrl
     val working: Boolean get() = busy
 
+    /** playlist [s] gets its programme data from elsewhere: what was read of the old EPG goes (the playlist's own copy stays) */
+    fun forgetGuide(ctx: Context, s: Int) {
+        chanFile(ctx, s).delete(); progFile(ctx, s).delete(); pastFile(ctx, s).delete()
+        if (s == src) { covered = 0; lib = null; gids = emptyArray(); icons = emptyMap(); soon = emptyMap(); guideNote = ""; gen++; worker = null }
+    }
+
     /** playlist [s] is removed: what was kept of it on the device goes */
     fun forgetFiles(ctx: Context, s: Int) {
         if (s == src) { forget(ctx); return }
@@ -118,7 +124,7 @@ object Repo {
         val prefs = Prefs(app)
         if (lib != null && !force) { ready(); if (!busy && soon.isEmpty()) loadGuide(app, prefs, false, guide) else guide(); return }
         if (busy) return
-        val link = prefs.playlist; val extraLink = prefs.extra; val ownGuide = prefs.guide
+        val link = prefs.playlist; val extraLink = prefs.extra; val ownGuide = prefs.guideLink
         if (link.isEmpty()) { error = "none"; ready(); return }
         val s = src; val g = gen
         val me = Any(); worker = me
