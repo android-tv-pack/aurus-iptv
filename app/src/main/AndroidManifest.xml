@@ -4,6 +4,8 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- the app's own update: Android's installer still asks before each one -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- the row of recent channels on the TV's home screen -->
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />
 
@@ -33,6 +35,8 @@
                 <data android:scheme="channels" />
             </intent-filter>
         </activity>
+
+        <receiver android:name=".UpdateReceiver" android:exported="false" />
 
         <receiver android:name=".HomeReceiver" android:exported="true">
             <intent-filter>

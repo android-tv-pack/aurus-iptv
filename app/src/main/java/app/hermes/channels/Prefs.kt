@@ -138,5 +138,9 @@ class Prefs(ctx: Context) {
     /** in the channel list the small window plays the channel under the focus (false: it stays on the channel that is watched) */
     var previewFocus: Boolean get() = flag("previewFocus", false); set(v) = put("previewFocus", v)
 
+    /** when a newer version was last looked for, and which one was found ("" = none) */
+    var updateChecked: Long get() = p.getLong("updateChecked", 0L); set(v) { p.edit().putLong("updateChecked", v).apply() }
+    var updateSeen: String get() = str("updateSeen"); set(v) = put("updateSeen", v)
+
     var homeChannel: Long get() = p.getLong("homeChannel", 0L); set(v) { p.edit().putLong("homeChannel", v).apply() }
 }

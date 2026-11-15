@@ -11,8 +11,8 @@ android {
         applicationId = "app.hermes.channels"
         minSdk = 24
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.22-beta"
+        versionCode = 23
+        versionName = "0.23-beta"
     }
     buildTypes {
         release {

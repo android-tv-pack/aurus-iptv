@@ -218,6 +218,9 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         buildPlayer()
+        // a newer version is looked for once a day (shown in the settings), and the installer's news redraws them
+        Update.onChange = { main.post { page.refresh() } }
+        Update.check(prefs, false) { page.refresh() }
         placeSurface()
         val test = testStream
         if (test != null) {
@@ -2043,6 +2046,24 @@ class MainActivity : Activity() {
         sh.button("Close").show { if (page.isOpen) page.focus() }
     }
 
+    /** OK on "Aurus IPTV update": looks for a newer version, or offers the one that was found */
+    private fun askUpdate() {
+        val r = Update.available
+        if (r == null || Update.progress >= 0) {
+            if (Update.progress < 0) Update.check(prefs, true) { page.refresh() }
+            page.refresh()
+            return
+        }
+        // (No asking beforehand for leave to install: on TVs the app is listed under "Install unknown apps" only once it has
+        // tried. Android's installer asks for that leave itself the first time, with its own way to the setting.)
+        Sheet(ui, "Aurus IPTV ${r.name}", "You have ${BuildConfig.VERSION_NAME.replace("-", " ")}. The new version is downloaded from the app's releases on GitHub, " +
+            "then Android asks you to confirm the update." + (if (Update.allowed(this)) "" else " The first time, Android also asks you to allow Aurus IPTV to install apps: choose Settings there and switch it on.") +
+            " Your playlists and settings stay as they are.")
+            .button("Download and install", primary = true) { Update.install(this, r) { page.refresh() }; page.refresh() }
+            .button("Not now")
+            .show { if (page.isOpen) page.focus() }
+    }
+
     /** the settings are drawn again (the playlists listed in them changed) */
     private fun reopenSettings() { if (page.isOpen) { page.close(); page.keepRow = true; openSettings() } }
 
@@ -2200,10 +2221,11 @@ class MainActivity : Activity() {
                     publishHome()
                 }
             )),
-            Page.Tab("About", "Aurus IPTV is a player for your own playlist: it brings no channels of its own. It is part of Android TV Pack, a set of free apps for TV boxes, " +
+            Page.Tab("System", "Aurus IPTV is a player for your own playlist: it brings no channels of its own. It is part of Android TV Pack, a set of free apps for TV boxes, " +
                 "with no adverts, no account and no tracking. Your playlist link stays on this device.",
                 stats = { listOf("NETWORK USE" to "Only your playlist, its guide and logos, and the channels you watch") },
                 rows = listOf(
+                Page.Row("Aurus IPTV update", "A newer version, from the app's public releases on GitHub", { Update.label() }, steps = false) { askUpdate() },
                 Page.Row("Version", if (isBeta) "A beta: still being tested, expect rough edges" else "Aurus IPTV for Android TV", { BuildConfig.VERSION_NAME }, steps = false) {},
                 Page.Row("Developer", "Android TV Pack", { DEVELOPER }, steps = false) {},
                 Page.Row("GitHub", "Source, new versions, reporting a fault", { GITHUB }, steps = false) {

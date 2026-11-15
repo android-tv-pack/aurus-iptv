@@ -11,7 +11,8 @@ Aurus IPTV brings **no channels of its own**. It has no adverts, no account and 
 ## Install
 
 1. Download **Aurus-IPTV-beta.apk** from the newest entry on the [releases page](https://github.com/android-tv-pack/aurus-iptv/releases).
-   Direct link, for the *Downloader* app on the TV: `https://github.com/android-tv-pack/aurus-iptv/releases/download/v0.22-beta/Aurus-IPTV-beta.apk` (the link names the version, so it changes with each beta)
+   Direct link, for the *Downloader* app on the TV: `https://github.com/android-tv-pack/aurus-iptv/releases/download/v0.23-beta/Aurus-IPTV-beta.apk` (the link names the version, so it changes with each beta)
+   Once installed, the app updates itself: Settings (MENU) > System > *Aurus IPTV update*.
 2. Put it on the TV and open it: with a file manager app, with the *Downloader* app, or from a USB stick. Android asks once to allow installs from that app.
 3. Open **Aurus IPTV**, press **MENU** (or choose *Settings* at the bottom of the channel lists), and add your playlist under *Playlists*.
 
