@@ -61,7 +61,7 @@ object Repo {
         var hops = 0
         while (true) {
             c.connectTimeout = 10000; c.readTimeout = 30000
-            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) Channels")
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AurusIPTV")
             val code = c.responseCode
             if (code in 301..308 && hops++ < 4) {
                 val next = URL(c.url, c.getHeaderField("Location") ?: throw java.io.IOException("HTTP $code"))

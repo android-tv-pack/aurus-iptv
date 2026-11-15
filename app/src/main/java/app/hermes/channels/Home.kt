@@ -30,10 +30,12 @@ object Home {
                 val cr = app.contentResolver
                 var id = prefs.homeChannel
                 if (id != 0L && cr.query(ContentUris.withAppendedId(CHANNELS, id), arrayOf("_id"), null, null, null)?.use { it.count } != 1) id = 0L
+                // (a row made by an earlier version carries the app's earlier name)
+                if (id != 0L) try { cr.update(ContentUris.withAppendedId(CHANNELS, id), ContentValues().apply { put("display_name", "Aurus IPTV") }, null, null) } catch (_: Exception) {}
                 if (id == 0L) {
                     val v = ContentValues().apply {
                         put("type", "TYPE_PREVIEW")
-                        put("display_name", "Channels")
+                        put("display_name", "Aurus IPTV")
                         put("input_id", app.packageName + "/.MainActivity")
                         put("app_link_intent_uri", "channels://open")
                         put("internal_provider_id", "recent")

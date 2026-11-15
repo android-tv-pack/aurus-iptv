@@ -173,7 +173,7 @@ class MainActivity : Activity() {
         digits = ui.label(40f, Color.WHITE, true).apply { setShadowLayer(u(6).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
         root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
         setContentView(root)
-        page = Page(ui, root, "Settings", "Channels " + BuildConfig.VERSION_NAME)
+        page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME)
         takeDropped()
         favs = prefs.favs.toMutableSet()
         recents = prefs.recents
@@ -192,7 +192,7 @@ class MainActivity : Activity() {
             return lines
         }
         val list = take("playlist.txt")
-        if (list.isNotEmpty()) { ensureSource(); prefs.playlist = list[0]; prefs.extra = list.getOrNull(1).orEmpty(); Repo.forget(this); Log.i(tag, "a playlist link was taken") }
+        if (list.isNotEmpty()) { ensureSource(); prefs.playlist = list[0]; list.getOrNull(1)?.let { prefs.extra = it }; Repo.forget(this); Log.i(tag, "a playlist link was taken") }
         val guide = take("guide.txt")
         if (guide.isNotEmpty()) { prefs.setEpgOf(prefs.source, prefs.addEpg(guide[0])); Repo.forgetGuide(this, prefs.source); Log.i(tag, "a guide link was taken") }
     }
@@ -312,7 +312,7 @@ class MainActivity : Activity() {
 
     private val http by lazy {
         DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android) Channels")
+            .setUserAgent("Mozilla/5.0 (Linux; Android) AurusIPTV")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(10000).setReadTimeoutMs(15000)
     }
@@ -2193,11 +2193,11 @@ class MainActivity : Activity() {
                     publishHome()
                 }
             )),
-            Page.Tab("About", "Channels is a player for your own playlist: it brings no channels of its own. It is part of Android TV Pack, a set of free apps for TV boxes, " +
+            Page.Tab("About", "Aurus IPTV is a player for your own playlist: it brings no channels of its own. It is part of Android TV Pack, a set of free apps for TV boxes, " +
                 "with no adverts, no account and no tracking. Your playlist link stays on this device.",
                 stats = { listOf("NETWORK USE" to "Only your playlist, its guide and logos, and the channels you watch") },
                 rows = listOf(
-                Page.Row("Version", "Channels for Android TV", { BuildConfig.VERSION_NAME }, steps = false) {},
+                Page.Row("Version", "Aurus IPTV for Android TV", { BuildConfig.VERSION_NAME }, steps = false) {},
                 Page.Row("Developer", "Android TV Pack", { DEVELOPER }, steps = false) {},
                 Page.Row("GitHub", "Source, new versions, reporting a fault", { GITHUB }, steps = false) {
                     // a TV box seldom has a browser: where there is none, the address is shown large enough to type into a phone
@@ -2305,7 +2305,7 @@ class MainActivity : Activity() {
         /** how far a picture's time may come out of the decoder from the time that went in and still be taken for the same picture */
         const val NEAR_US = 14_500L
         const val DEVELOPER = "aze038"
-        const val GITHUB = "github.com/android-tv-pack"
+        const val GITHUB = "github.com/android-tv-pack/aurus-iptv"
         /** the picture's sizes, in the order OK steps through them */
         val PICTURE = arrayOf("As sent", "Fill the screen", "Stretch", "16:9", "4:3")
         // the channel window, in screen units (the screen is 960 wide): lists, channels, then the picture's small window
