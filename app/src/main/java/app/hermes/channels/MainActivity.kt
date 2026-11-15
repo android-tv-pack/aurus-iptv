@@ -636,9 +636,14 @@ class MainActivity : Activity() {
         if (playKey.isNotEmpty() && kotlin.math.abs(prefs.rate(playKey) - fps) > 0.3f) prefs.setRate(playKey, fps)
         Log.i(tag, "#${current + 1} ${"%.2f".format(Locale.US, fps)} pictures a second ($how, ${SystemClock.elapsedRealtime() - startedAt} ms in)")
         // (not while channels are only looked at in the small window: the screen would go dark again and again)
-        if (!browsing) matchScreen()
+        if (!browsing) rateKnown()
         page.refresh()
     }
+
+    /** the channel has been on for a few seconds: the viewer stays with it */
+    private var settled = false
+    private val settle = Runnable { settled = true; if (!browsing) matchScreen() }
+    private fun rateKnown() { if (settled || !prefs.rateWait) matchScreen() }
 
     /** switches the screen to the rate of the channel that plays (same resolution), so that motion is even */
     private fun matchScreen() {
@@ -725,7 +730,9 @@ class MainActivity : Activity() {
         steadySound = false
         playKey = if (testStream == null) l.keyOf(i) else ""
         // a channel watched before: the screen is set for its rate now, while the channels change, not a second into its picture
-        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; matchScreen() } }
+        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; rateKnown() } }
+        // (while channels are changed one after another the screen stays as it is: a change of its rate makes the TV go dark for a moment)
+        if (!again) { settled = false; main.removeCallbacks(settle); if (!preview) main.postDelayed(settle, SETTLE_MS) }
         mending = "mend" in trial || i in tryMend || playKey in prefs.mended
         // a choice of sound or subtitles made on the channel before does not fit this one's tracks: the languages chosen last decide
         selector?.let { it.setParameters(it.buildUponParameters().clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -1616,7 +1623,7 @@ class MainActivity : Activity() {
         backdrop.visibility = View.GONE
         detailsFor = -1
         placeSurface()
-        if (!back) matchScreen()
+        if (!back) rateKnown()
         if (back && before >= 0) {
             if (current != before) play(before) else { main.removeCallbacks(watched); main.postDelayed(watched, 30_000) }
         }
@@ -2030,8 +2037,13 @@ class MainActivity : Activity() {
                     prefs.soundDelay = prefs.soundDelay + 20 * d
                     delayUs = prefs.soundDelay * 1000L
                 },
-                Page.Row("Refresh rate", "Auto: the TV is switched to the channel's rate, for even motion", { if (prefs.matchRate) "Auto" else "Off" }) {
-                    prefs.matchRate = !prefs.matchRate
+                Page.Row("Refresh rate", "The TV is switched to the channel's rate, for even motion. It goes dark for a moment each time it switches",
+                    { if (!prefs.matchRate) "Off" else if (prefs.rateWait) "Auto, once you stay on a channel" else "Auto, at once" }) { d ->
+                    // Off, once you stay, at once
+                    val now = if (!prefs.matchRate) 0 else if (prefs.rateWait) 1 else 2
+                    val next = (now + (if (d < 0) 2 else 1)) % 3
+                    prefs.matchRate = next != 0
+                    if (next != 0) prefs.rateWait = next == 1
                     matchScreen()
                 },
                 Page.Row("Catch-up", "Earlier programmes, start over and pause, on channels the playlist says are recorded", { if (prefs.archive) "On" else "Off" }) {
@@ -2181,6 +2193,8 @@ class MainActivity : Activity() {
     }
 
     private companion object {
+        /** how long a channel is on before the screen's rate is changed for it */
+        const val SETTLE_MS = 5000L
         const val DEVELOPER = "aze038"
         const val GITHUB = "github.com/android-tv-pack"
         /** the picture's sizes, in the order OK steps through them */

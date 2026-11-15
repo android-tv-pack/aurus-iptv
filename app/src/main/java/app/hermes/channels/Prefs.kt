@@ -90,6 +90,8 @@ class Prefs(ctx: Context) {
     var hardwareSync: Boolean get() = flag("hardwareSync2", false); set(v) = put("hardwareSync2", v)
     /** the screen is switched to the channel's frame rate (50 or 60 a second), so that motion is even */
     var matchRate: Boolean get() = flag("matchRate", true); set(v) = put("matchRate", v)
+    /** the screen changes its rate only once a channel has been on for a few seconds (false: at once, with every change of channel) */
+    var rateWait: Boolean get() = flag("rateWait", true); set(v) = put("rateWait", v)
     /** how much later (+) or earlier (-) the sound is played against the picture, in milliseconds (not with hardwareSync) */
     var soundDelay: Int get() = p.getInt("soundDelay", 0).coerceIn(-400, 400); set(v) { p.edit().putInt("soundDelay", v.coerceIn(-400, 400)).apply() }
     /** Up on the remote is the next channel (false: the previous one) */
