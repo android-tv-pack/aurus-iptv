@@ -36,7 +36,7 @@ class Prefs(ctx: Context) {
     fun removeSource(id: Int) {
         val rest = sources.filter { it.first != id }
         val e = p.edit()
-        if (id == 0) for (k in arrayOf("playlist", "extra", "guide", "favs", "recents", "last", "scope", "homeRows", "prev", "pictures", "mended", "count", "epg")) e.remove(k)
+        if (id == 0) for (k in arrayOf("playlist", "extra", "guide", "favs", "recents", "last", "scope", "homeRows", "prev", "pictures", "mended", "count", "epg", "rates")) e.remove(k)
         else for (k in p.all.keys) if (k.startsWith("s$id.")) e.remove(k)
         e.apply()
         putSources(rest)
@@ -106,6 +106,13 @@ class Prefs(ctx: Context) {
     fun setPicture(key: String, mode: Int) {
         val rest = lines(pre + "pictures").filter { !it.startsWith("$key\t") }
         put(pre + "pictures", (if (mode == 0) rest else (rest + "$key\t$mode")).takeLast(300).joinToString("\n"))
+    }
+
+    /** how many pictures a second a channel had when it was last watched (0 = not known): the screen is set for it before its picture comes */
+    fun rate(key: String): Float = lines(pre + "rates").firstOrNull { it.startsWith("$key\t") }?.substringAfter('\t')?.toFloatOrNull() ?: 0f
+    fun setRate(key: String, fps: Float) {
+        if (key.isEmpty()) return
+        put(pre + "rates", (lines(pre + "rates").filter { !it.startsWith("$key\t") } + "$key\t$fps").takeLast(1500).joinToString("\n"))
     }
 
     /** channels whose stream is sent with picture and sound on different clocks: they are read the careful way from the start */

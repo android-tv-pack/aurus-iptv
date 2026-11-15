@@ -515,7 +515,10 @@ class MainActivity : Activity() {
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, "nosound" in trial).setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, "nopicture" in trial)
             .setPreferredAudioLanguage(prefs.audioLang.ifEmpty { null }).setPreferredTextLanguage(prefs.subLang.ifEmpty { null })
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty()))
-        val p = ExoPlayer.Builder(this, Renderers(this)).setTrackSelector(sel).build()
+        // a channel starts to move as soon as its first picture is there (the usual 2.5 s in hand first showed that picture standing still);
+        // after a stall it takes more in hand, so that it does not stall again at once
+        val load = androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(20_000, 50_000, 300, 2_000).build()
+        val p = ExoPlayer.Builder(this, Renderers(this)).setTrackSelector(sel).setLoadControl(load).build()
         p.setVideoSurfaceView(surface)
         p.addListener(listener)
         // the times of the first pictures tell the channel's rate within half a second
@@ -630,6 +633,7 @@ class MainActivity : Activity() {
         if (rated || fps <= 0f) return
         rated = true
         channelFps = fps
+        if (playKey.isNotEmpty() && kotlin.math.abs(prefs.rate(playKey) - fps) > 0.3f) prefs.setRate(playKey, fps)
         Log.i(tag, "#${current + 1} ${"%.2f".format(Locale.US, fps)} pictures a second ($how, ${SystemClock.elapsedRealtime() - startedAt} ms in)")
         // (not while channels are only looked at in the small window: the screen would go dark again and again)
         if (!browsing) matchScreen()
@@ -720,6 +724,8 @@ class MainActivity : Activity() {
         align = Align()
         steadySound = false
         playKey = if (testStream == null) l.keyOf(i) else ""
+        // a channel watched before: the screen is set for its rate now, while the channels change, not a second into its picture
+        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; matchScreen() } }
         mending = "mend" in trial || i in tryMend || playKey in prefs.mended
         // a choice of sound or subtitles made on the channel before does not fit this one's tracks: the languages chosen last decide
         selector?.let { it.setParameters(it.buildUponParameters().clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -737,6 +743,9 @@ class MainActivity : Activity() {
             say("This channel is sent in a form the app cannot play.")
             return
         }
+        // the decoder of the channel before is let go, not handed on: handed on, the box's decoder stumbled over a channel
+        // of another picture size, which cost half a second and a second start
+        p.stop()
         p.setMediaSource(src)
         p.prepare()
         p.playWhenReady = true
@@ -804,7 +813,7 @@ class MainActivity : Activity() {
                 retries++
                 if (retries == 2 && tunnel) noTunnel.add(current)
                 if (net && retries >= 2) { shade.visibility = View.VISIBLE; say("The channel's server is not answering.\nTrying again \u2026") }
-                main.postDelayed({ play(current, true, browsing) }, if (net) 1200L * retries else 300L * retries)
+                main.postDelayed({ play(current, true, browsing) }, if (net) 1200L * retries else if (retries == 1) 0L else 300L * retries)
                 return
             }
             // (the last picture of the channel before would stay under the words)
