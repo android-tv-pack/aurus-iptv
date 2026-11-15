@@ -8,7 +8,9 @@ package app.hermes.channels.core
  */
 object M3u {
 
-    class Channel(val name: String, val group: String, val url: String, var logo: String, var tvgId: String) {
+    class Channel(val name: String, val group: String, val url: String, var logo: String, var tvgId: String,
+                  /** how what the channel showed earlier is asked for; null = it is not recorded */
+                  val rec: Catchup.Rule? = null) {
         /** the channel's number in its stream address (".../KEY/19241/index.m3u8" -> "19241"), "" when it has none */
         val sid: String get() = streamId(url)
     }
@@ -32,12 +34,15 @@ object M3u {
         var group = ""
         var logo = ""
         var id = ""
+        var head: Map<String, String> = emptyMap()
+        var rec: Catchup.Rule? = null
         for (raw in text.lineSequence()) {
             val l = raw.trim().trimStart('\uFEFF')
             when {
                 l.startsWith("#EXTM3U") -> {
                     val a = attr.findAll(l).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
                     guide = (a["url-tvg"] ?: a["x-tvg-url"] ?: a["tvg-url"] ?: "").split(',').first().trim()
+                    head = a
                 }
                 l.startsWith("#EXTINF") -> {
                     val a = attr.findAll(l).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
@@ -48,13 +53,14 @@ object M3u {
                     group = a["group-title"] ?: ""
                     logo = a["tvg-logo"] ?: ""
                     id = a["tvg-id"] ?: ""
+                    rec = Catchup.rule(a, head)
                 }
                 l.startsWith("#EXTGRP:") -> if (group.isEmpty()) group = l.substring(8).trim()
                 l.isEmpty() || l.startsWith("#") -> {}
                 else -> {
                     val n = name
-                    if (!n.isNullOrEmpty()) out.add(Channel(n, group, l, logo, id))
-                    name = null; group = ""; logo = ""; id = ""
+                    if (!n.isNullOrEmpty()) out.add(Channel(n, group, l, logo, id, rec))
+                    name = null; group = ""; logo = ""; id = ""; rec = null
                 }
             }
         }

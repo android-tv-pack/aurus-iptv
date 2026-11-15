@@ -64,6 +64,13 @@ object Repo {
     private fun extraFile(ctx: Context) = File(ctx.filesDir, "extra.m3u")
     private fun chanFile(ctx: Context) = File(ctx.filesDir, "guide-channels.tsv")
     private fun progFile(ctx: Context) = File(ctx.filesDir, "guide2.tsv")
+    /** what was on earlier (titles only), for the channels that are recorded */
+    private fun pastFile(ctx: Context) = File(ctx.filesDir, "guide-past.tsv")
+    /** how many days back the playlist's channels are recorded at most (0 = none is) */
+    @Volatile var recDays = 0
+        private set
+    @Volatile var recCount = 0
+        private set
 
     // ---- figures for the settings
     @Volatile var covered = 0
@@ -75,7 +82,7 @@ object Repo {
 
     /** a new playlist link was given: what was kept of the old one goes */
     fun forget(ctx: Context) {
-        listFile(ctx).delete(); extraFile(ctx).delete(); chanFile(ctx).delete(); progFile(ctx).delete()
+        listFile(ctx).delete(); extraFile(ctx).delete(); chanFile(ctx).delete(); progFile(ctx).delete(); pastFile(ctx).delete()
         File(ctx.filesDir, "guide.tsv").delete()            // (the file of an earlier version)
         covered = 0
         lib = null; gids = emptyArray(); icons = emptyMap(); soon = emptyMap(); error = ""
@@ -104,10 +111,12 @@ object Repo {
                 if (other == null && prefs.extra.isNotEmpty()) other = try { text(prefs.extra).also { ef.writeText(it) } } catch (_: Exception) { null }
                 val merged = M3u.merge(M3u.parse(own), other?.let { M3u.parse(it) })
                 if (merged.channels.isEmpty()) throw java.io.IOException("empty")
+                recCount = merged.channels.count { it.rec != null }
+                recDays = merged.channels.maxOfOrNull { it.rec?.days ?: 0 } ?: 0
                 lib = Library(merged.channels)
                 guideUrl = prefs.guide.ifEmpty { merged.guideUrl }
                 error = ""
-                Log.i(TAG, "playlist: ${merged.channels.size} channels, ${M3u.groups(merged.channels).size} groups, ${merged.channels.count { it.logo.isNotEmpty() }} logos, ${SystemClock.elapsedRealtime() - t0} ms" + (if (fetched) " (fetched)" else ""))
+                Log.i(TAG, "playlist: ${merged.channels.size} channels, ${M3u.groups(merged.channels).size} groups, ${merged.channels.count { it.logo.isNotEmpty() }} logos, $recCount recorded (up to $recDays days), ${SystemClock.elapsedRealtime() - t0} ms" + (if (fetched) " (fetched)" else ""))
                 main.post(ready)
                 // an old copy is replaced for the next start
                 if (stale && !fetched) try {
@@ -138,11 +147,13 @@ object Repo {
         if (guideUrl.isEmpty()) { guideNote = "No guide link"; index(app, l); main.post(changed); return }
         val cf = chanFile(app); val pf = progFile(app)
         if (cf.exists() && pf.exists()) { index(app, l); loadSoon(app); main.post(changed) }
-        if (force || !cf.exists() || !pf.exists() || System.currentTimeMillis() - pf.lastModified() > FRESH_MS) {
+        val qf = pastFile(app)
+        val pastMs = recDays.coerceAtMost(7) * 86_400_000L
+        if (force || !cf.exists() || !pf.exists() || (pastMs > 0 && !qf.exists()) || System.currentTimeMillis() - pf.lastModified() > FRESH_MS) {
             guideNote = "Reading the guide"
             File(app.filesDir, "guide.tsv").delete()            // (the file of an earlier version, without descriptions)
             main.post(changed)
-            val tc = File(app.filesDir, "guide-channels.tmp"); val tp = File(app.filesDir, "guide.tmp")
+            val tc = File(app.filesDir, "guide-channels.tmp"); val tp = File(app.filesDir, "guide.tmp"); val tq = File(app.filesDir, "guide-past.tmp")
             try {
                 val t0 = SystemClock.elapsedRealtime()
                 val now = System.currentTimeMillis()
@@ -150,11 +161,13 @@ object Repo {
                 val raw = fetch(guideUrl)
                 val input = if (guideUrl.substringBefore('?').endsWith(".gz", true)) GZIPInputStream(raw, 1 shl 16) else raw
                 tc.bufferedWriter().use { wc ->
+                    tq.bufferedWriter().use { wq ->
                     tp.bufferedWriter().use { wp ->
                         val scan = Guide.Scanner({ b ->
                             Guide.chanOf(b)?.let { c -> wc.write(c.id + "\t" + c.icon + "\t" + c.names.joinToString("\t") { it.replace('\t', ' ') } + "\n"); chans++ }
                         }, { b ->
                             Guide.progOf(b)?.let { (id, p) ->
+                                if (p.stop <= now - 3600_000 && p.stop > now - pastMs) wq.write(id + "\t" + p.start + "\t" + p.stop + "\t" + p.title.replace('\t', ' ').replace('\n', ' ') + "\n")
                                 if (p.stop > now - 3600_000 && p.start < now + WINDOW_MS) { wp.write(id + "\t" + p.start + "\t" + p.stop + "\t" + p.title.replace('\t', ' ').replace('\n', ' ') + "\t" + p.desc.take(600).replace('\t', ' ').replace('\n', ' ') + "\n"); progs++ }
                             }
                         })
@@ -163,14 +176,15 @@ object Repo {
                             while (true) { val n = s.read(buf); if (n < 0) break; scan.feed(buf, n) }
                         }
                     }
+                    }
                 }
                 if (chans == 0) throw java.io.IOException("no channels")
-                tc.renameTo(cf); tp.renameTo(pf)
+                tc.renameTo(cf); tp.renameTo(pf); tq.renameTo(qf)
                 Log.i(TAG, "guide: $chans channels, $progs programmes, ${(SystemClock.elapsedRealtime() - t0) / 1000} s")
                 guideNote = ""
                 index(app, l); loadSoon(app)
             } catch (e: Exception) {
-                tc.delete(); tp.delete()
+                tc.delete(); tp.delete(); tq.delete()
                 guideNote = if (cf.exists()) "" else "Could not read the guide"
                 Log.w(TAG, "guide failed: ${e.javaClass.simpleName}")
             }
@@ -237,12 +251,12 @@ object Repo {
 
     fun nowNext(i: Int, now: Long): Pair<Guide.Prog?, Guide.Prog?> = Guide.nowNext(gids.getOrNull(i)?.let { soon[it] }, now)
 
-    /** every programme the guide has for channel [i], in time order. Reads a file: not for the main thread. */
-    fun programmes(ctx: Context, i: Int): List<Guide.Prog> {
+    /** every programme the guide has for channel [i], in time order; with [past] also what was on in the days before. Reads files: not for the main thread. */
+    fun programmes(ctx: Context, i: Int, past: Boolean = false): List<Guide.Prog> {
         val id = gids.getOrNull(i) ?: return emptyList()
         val out = ArrayList<Guide.Prog>()
-        try {
-            progFile(ctx.applicationContext).bufferedReader().useLines { lines ->
+        for (file in listOfNotNull(if (past) pastFile(ctx.applicationContext) else null, progFile(ctx.applicationContext))) try {
+            file.bufferedReader().useLines { lines ->
                 for (line in lines) {
                     if (!line.startsWith(id) || line.getOrNull(id.length) != '\t') continue
                     val f = line.split('\t', limit = 5)

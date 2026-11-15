@@ -52,6 +52,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import app.hermes.channels.core.Guide
 import app.hermes.channels.core.Library
+import app.hermes.channels.core.Catchup
 import app.hermes.channels.core.M3u
 import app.hermes.channels.core.Rate
 import app.hermes.channels.core.Stamp
@@ -68,7 +69,10 @@ import java.util.Locale
  *    small window on the right, with what it shows now (and what that is about) and later below it.
  *    OK watches it full-screen, Back returns to the channel that was on. Holding OK makes a favourite.
  *  - Right: the programmes of the channel that plays
- *  - hold OK: the bar with sound, subtitles and picture size; Left / Right choose one, OK steps it
+ *  - hold OK: the bar with pause, start over, sound, subtitles and picture size; Left / Right choose one, OK steps it
+ *  - a recording (a programme of the days before chosen under Right, "start over", or after a pause): Left / Right
+ *    move a minute, OK pauses, Back returns to what is on now
+ *  - Back: the channel that was on before
  *  - number keys: the channel with that number;  INFO: what plays now and next;  MENU: the settings
  *
  * The playlist link holds the subscription key: it stays in the app's private storage and is never logged;
@@ -600,12 +604,20 @@ class MainActivity : Activity() {
     }
 
     /** [preview]: the channel is only looked at in the small window; it is not remembered as the one that was on */
-    private fun play(i: Int, again: Boolean = false, preview: Boolean = false) {
+    private fun play(i: Int, again: Boolean = false, preview: Boolean = false, at: Long = if (again) shiftAt else 0L) {
         val p = player ?: return
         val l = lib ?: return
         val c = l.channels.getOrNull(i) ?: return
         if (!again) retries = 0
         current = i
+        if (!preview) commit(i)
+        // a recording: from the moment [at] on (not while channels are only looked at)
+        val rule = c.rec
+        val from = if (at > 0L && rule != null && prefs.archive && !preview && testStream == null) at else 0L
+        shiftAt = from; shiftSeekTo = 0L; paused = false
+        shiftLast = SystemClock.elapsedRealtime()
+        main.removeCallbacks(shiftTick); main.removeCallbacks(shiftGo)
+        if (from > 0L) { main.postDelayed(shiftTick, 1000); if (shiftProgsFor != i) loadShiftProgs(i) }
         if (testStream == null && !preview) prefs.last = l.keyOf(i)
         say("")
         if (!preview && !browsing && !page.isOpen) showInfo()
@@ -615,7 +627,8 @@ class MainActivity : Activity() {
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
         playGen++
         startedAt = SystemClock.elapsedRealtime()
-        Log.i(tag, "play #${i + 1}" + (if (tunnel) " (hardware sync)" else ""))
+        Log.i(tag, "play #${i + 1}" + (if (tunnel) " (hardware sync)" else "") + (if (from > 0L) " (recording, ${(System.currentTimeMillis() - from) / 60000} min back)" else "") +
+            (if (rule != null) " [recorded ${rule.days} d]" else "") + (if (Repo.nowNext(i, System.currentTimeMillis()).first != null) " [guide]" else ""))
         main.removeCallbacks(probe); main.postDelayed(probe, 2000)
         main.removeCallbacks(tunnelCheck); if (tunnel) main.postDelayed(tunnelCheck, 8000)
         main.removeCallbacks(watched); if (!preview) main.postDelayed(watched, 30_000)
@@ -629,7 +642,8 @@ class MainActivity : Activity() {
         cues.show(emptyList())
         pictureMode = prefs.picture(l.keyOf(i))
         placeSurface()
-        p.setMediaSource(source(c.url))
+        val nowSec = System.currentTimeMillis() / 1000
+        p.setMediaSource(source(if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url))
         p.prepare()
         p.playWhenReady = true
     }
@@ -689,7 +703,7 @@ class MainActivity : Activity() {
                 main.postDelayed({ play(current, true, browsing) }, 300L * retries)
                 return
             }
-            say("This channel does not play right now.")
+            say(if (shiftAt > 0L) "This channel has no recording of that time.\nBack returns to what is on now." else "This channel does not play right now.")
         }
     }
 
@@ -742,13 +756,13 @@ class MainActivity : Activity() {
     private val chips = ArrayList<TextView>()
     /** the bar is up with its three choices (sound, subtitles, picture size) to step through */
     private var optionsOpen = false
-    private val hideInfo = Runnable { if (optionsOpen) closeOptions() else infoBar.animate().alpha(0f).setDuration(350).start() }
+    private val hideInfo = Runnable { if (optionsOpen) closeOptions() else if (!paused) infoBar.animate().alpha(0f).setDuration(350).start() }
 
     private fun buildInfo() {
         infoBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(240, 6, 9, 18), Color.argb(185, 6, 9, 18), Color.TRANSPARENT))
+            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(252, 6, 9, 18), Color.argb(236, 6, 9, 18), Color.argb(150, 6, 9, 18), Color.TRANSPARENT))
             setPadding(u(44), u(52), u(44), u(24))
             alpha = 0f
         }
@@ -775,7 +789,7 @@ class MainActivity : Activity() {
         infoHint = ui.label(10f, white(105)).apply { text = "Hold OK   sound, subtitles, picture size" }
         col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
         chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
-        for (i in 0..2) {
+        for (i in 0..4) {
             val t = ui.label(12f, Color.WHITE, true).apply {
                 isFocusable = true
                 isClickable = true
@@ -787,7 +801,7 @@ class MainActivity : Activity() {
             }
             paint(false)
             t.setOnFocusChangeListener { _, has -> paint(has) }
-            t.setOnClickListener { step(i); refreshChips(); main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000) }
+            t.setOnClickListener { step(i); if (optionsOpen) { refreshChips(); main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000) } }
             chips += t
             chipRow.addView(t, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = u(8) })
         }
@@ -802,27 +816,158 @@ class MainActivity : Activity() {
         val l = lib ?: return
         val c = l.channels.getOrNull(current) ?: return
         val now = System.currentTimeMillis()
+        // a recording (or a paused channel) is told about as of its own moment, not as of now
+        val at = when { shiftSeekTo > 0L -> shiftSeekTo; shiftAt > 0L -> shiftAt; paused -> pausedAt; else -> now }
+        val behind = at < now - 15_000
         infoName.text = "${current + 1}   ${c.name}"
         Images.show(Repo.logo(current), infoLogo, u(58))
-        val (cur, next) = Repo.nowNext(current, now)
-        infoNow.text = cur?.title ?: c.group
-        infoTimes.visibility = if (cur != null) View.VISIBLE else View.GONE
+        val (cur, next) = if (!behind) Repo.nowNext(current, now) else Guide.nowNext(if (shiftProgsFor == current) shiftProgs else null, at)
+        infoNow.text = cur?.title ?: if (behind) "Recorded" else c.group
+        infoTimes.visibility = if (cur != null || behind || paused) View.VISIBLE else View.GONE
+        infoStart.visibility = if (cur != null) View.VISIBLE else View.GONE
+        infoStop.visibility = infoStart.visibility; infoProg.visibility = infoStart.visibility
         if (cur != null) {
             infoStart.text = hm(cur.start); infoStop.text = hm(cur.stop)
-            infoProg.f = Guide.progress(cur, now)
-            val min = ((cur.stop - now + 59_999) / 60_000).toInt()
-            infoLeft.text = leftText(min)
+            infoProg.f = Guide.progress(cur, at)
+        }
+        infoLeft.text = when {
+            behind -> (if (paused) "PAUSED" else "RECORDED") + "   " + dayHm(at) + "   \u00B7   " + agoText(((now - at) / 60_000).toInt()) + " behind"
+            paused -> "PAUSED"
+            cur != null -> leftText(((cur.stop - now + 59_999) / 60_000).toInt())
+            else -> ""
         }
         infoNext.text = if (next != null) "Next  " + hm(next.start) + "   " + next.title else ""
         infoNext.visibility = if (next != null) View.VISIBLE else View.GONE
+        infoHint.text = when {
+            behind || paused -> "\u25C0 \u25B6  one minute        OK  " + (if (paused) "play" else "pause") + "        BACK  what is on now        HOLD OK  more"
+            canShift() -> "Hold OK   pause, start over, sound, subtitles, picture size"
+            else -> "Hold OK   sound, subtitles, picture size"
+        }
         infoClock.text = hm(now)
     }
 
+    private fun agoText(min: Int): String = when {
+        min < 1 -> "moments"
+        min < 60 -> "$min min"
+        min < 48 * 60 -> if (min % 60 == 0) "${min / 60} h" else "${min / 60} h ${min % 60} min"
+        else -> "${min / 1440} days"
+    }
+
+    /** a time of today as 19:30, of another day as Sat 19:30 */
+    private fun dayHm(t: Long): String {
+        val day = SimpleDateFormat("yyyyMMdd", Locale.US)
+        return if (day.format(Date(t)) == day.format(Date())) hm(t) else SimpleDateFormat("EEE HH:mm", Locale.getDefault()).format(Date(t))
+    }
+
     private fun showInfo(ms: Long = 5000) {
-        if (optionsOpen) { fillInfo(); return }
         fillInfo()
+        if (optionsOpen) return
         infoBar.animate().cancel(); infoBar.alpha = 1f
-        main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, ms)
+        // (it stays up while the channel is paused)
+        main.removeCallbacks(hideInfo); if (!paused) main.postDelayed(hideInfo, ms)
+    }
+
+    // ---------------------------------------------------------------- recordings: what was on earlier, start over, pause
+
+    /** 0 = what is on now; else the moment (clock time) of the recording that plays, moving on as it plays */
+    private var shiftAt = 0L
+    /** where Left / Right are moving to, until the keys rest and it is played (0 = nowhere) */
+    private var shiftSeekTo = 0L
+    private var shiftLast = 0L
+    private var paused = false
+    /** the moment of the picture that stands still, and when it was stopped */
+    private var pausedAt = 0L
+    private var pausedSince = 0L
+    /** the programmes of the days before, of the channel [shiftProgsFor] */
+    private var shiftProgs: List<Guide.Prog> = emptyList()
+    private var shiftProgsFor = -1
+
+    /** is what the channel that plays showed earlier kept? */
+    private fun canShift() = testStream == null && prefs.archive && lib?.channels?.getOrNull(current)?.rec != null
+
+    private fun loadShiftProgs(i: Int) {
+        Thread({
+            val list = Repo.programmes(this, i, past = true)
+            main.post { shiftProgs = list; shiftProgsFor = i; if (infoBar.alpha > 0f && current == i) fillInfo() }
+        }, "channels-earlier").start()
+    }
+
+    /** the recording's moment moves on while it plays; when it has caught up with now, the channel itself takes over */
+    private val shiftTick = object : Runnable {
+        override fun run() {
+            val p = player ?: return
+            if (shiftAt <= 0L) return
+            val e = SystemClock.elapsedRealtime()
+            if (p.isPlaying) shiftAt += e - shiftLast
+            shiftLast = e
+            if (shiftAt >= System.currentTimeMillis() - 15_000) { play(current); return }
+            if (infoBar.alpha > 0f && shiftSeekTo == 0L) fillInfo()
+            main.postDelayed(this, 1000)
+        }
+    }
+
+    private val shiftGo = Runnable {
+        val to = shiftSeekTo
+        shiftSeekTo = 0L
+        if (to > 0L) { if (to >= System.currentTimeMillis() - 20_000) play(current) else play(current, at = to) }
+    }
+
+    /** Left / Right: back or on by [delta]; played once the keys rest */
+    private fun shiftSeek(delta: Long) {
+        val rule = lib?.channels?.getOrNull(current)?.rec
+        if (rule == null || !canShift()) return
+        val now = System.currentTimeMillis()
+        val base = when { shiftSeekTo > 0L -> shiftSeekTo; shiftAt > 0L -> shiftAt; paused -> pausedAt; else -> now }
+        shiftSeekTo = (base + delta).coerceIn(now - rule.days * 86_400_000L + 120_000, now)
+        if (shiftProgsFor != current) loadShiftProgs(current)
+        showInfo(6000)
+        main.removeCallbacks(shiftGo); main.postDelayed(shiftGo, 700)
+    }
+
+    private fun togglePause() {
+        val p = player ?: return
+        if (!paused) {
+            // (a channel that is not recorded could not be taken up again where it stopped)
+            if (!canShift() || current < 0) return
+            paused = true
+            pausedAt = if (shiftAt > 0L) shiftAt else System.currentTimeMillis()
+            pausedSince = SystemClock.elapsedRealtime()
+            p.pause()
+            if (shiftProgsFor != current) loadShiftProgs(current)
+            showInfo()
+        } else {
+            val stood = SystemClock.elapsedRealtime() - pausedSince
+            // after a moment's pause what was fetched plays on; after a longer one it is asked for again from where it stopped
+            if (stood < 8000) { paused = false; p.play(); showInfo() } else play(current, at = pausedAt)
+        }
+    }
+
+    /** the programme that is on, from its beginning */
+    private fun startOver() {
+        val cur = Repo.nowNext(current, System.currentTimeMillis()).first ?: return
+        if (canShift()) play(current, at = cur.start)
+    }
+
+    // ---------------------------------------------------------------- the channel before
+
+    /** the channel that is being watched (not one that is only looked at in the small window), and the one before it */
+    private var watchingIdx = -1
+    private var lastChannel = -1
+
+    private fun commit(i: Int) {
+        if (i == watchingIdx) return
+        if (watchingIdx >= 0) { lastChannel = watchingIdx; lib?.let { if (testStream == null) prefs.prev = it.keyOf(lastChannel) } }
+        watchingIdx = i
+    }
+
+    /** Back: to the channel that was on before this one. False when there is none. */
+    private fun swapLast(): Boolean {
+        val l = lib ?: return false
+        if (testStream != null) return false
+        val i = if (lastChannel >= 0) lastChannel else l.indexOf(prefs.prev)
+        if (i !in l.channels.indices || i == current) return false
+        play(i)
+        return true
     }
 
     // ---------------------------------------------------------------- sound, subtitles, picture size (hold OK while watching)
@@ -851,7 +996,9 @@ class MainActivity : Activity() {
     }
 
     private fun chipText(i: Int): String = when (i) {
-        0 -> {
+        0 -> if (paused) "\u25B6  Play" else "\u275A\u275A  Pause"
+        1 -> if (shiftAt > 0L || paused) "What is on now" else "Start over"
+        2 -> {
             val all = tracks(C.TRACK_TYPE_AUDIO)
             val at = all.indexOfFirst { it.selected }
             if (all.isEmpty() || at < 0) "Sound   \u2014" else {
@@ -865,21 +1012,29 @@ class MainActivity : Activity() {
                 "Sound   " + named(f, at + 1) + (if (kind.isNotEmpty()) " \u00B7 $kind" else "") + (if (coded.isNotEmpty()) " \u00B7 $coded" else "") + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "")
             }
         }
-        1 -> {
+        3 -> {
             val all = tracks(C.TRACK_TYPE_TEXT)
             val at = all.indexOfFirst { it.selected }
-            "Subtitles   " + when { all.isEmpty() -> "none on this channel"; at < 0 -> "Off"; else -> named(all[at].format, at + 1) + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "") }
+            "Subtitles   " + when { all.isEmpty() -> "none"; at < 0 -> "Off"; else -> named(all[at].format, at + 1) + (if (all.size > 1) "   ${at + 1} of ${all.size}" else "") }
         }
         else -> "Picture   " + PICTURE[pictureMode]
     }
 
-    private fun refreshChips() { for ((i, c) in chips.withIndex()) c.text = chipText(i) }
+    private fun refreshChips() {
+        for ((i, c) in chips.withIndex()) c.text = chipText(i)
+        // pausing and starting over need the channel to be recorded
+        val rec = canShift()
+        chips[0].visibility = if (rec) View.VISIBLE else View.GONE
+        chips[1].visibility = if (rec && (shiftAt > 0L || paused || Repo.nowNext(current, System.currentTimeMillis()).first != null)) View.VISIBLE else View.GONE
+    }
 
     /** OK on a choice goes to its next value */
     private fun step(i: Int) {
         val sel = selector ?: return
         when (i) {
-            0 -> {
+            0 -> { closeOptions(); togglePause() }
+            1 -> { closeOptions(); if (shiftAt > 0L || paused) play(current) else startOver() }
+            2 -> {
                 val all = tracks(C.TRACK_TYPE_AUDIO)
                 if (all.size < 2) return
                 val next = all[(all.indexOfFirst { it.selected } + 1) % all.size]
@@ -887,7 +1042,7 @@ class MainActivity : Activity() {
                 if (testStream == null) prefs.audioLang = lang
                 sel.setParameters(sel.buildUponParameters().setOverrideForType(TrackSelectionOverride(next.group.mediaTrackGroup, next.index)).setPreferredAudioLanguage(lang.ifEmpty { null }))
             }
-            1 -> {
+            3 -> {
                 val all = tracks(C.TRACK_TYPE_TEXT)
                 if (all.isEmpty()) return
                 val at = all.indexOfFirst { it.selected } + 1
@@ -919,7 +1074,7 @@ class MainActivity : Activity() {
         infoHint.visibility = View.GONE
         chipRow.visibility = View.VISIBLE
         infoBar.animate().cancel(); infoBar.alpha = 1f
-        chips[0].requestFocus()
+        (chips.firstOrNull { it.visibility == View.VISIBLE } ?: chips[2]).requestFocus()
         main.removeCallbacks(hideInfo); main.postDelayed(hideInfo, 9000)
     }
 
@@ -929,7 +1084,7 @@ class MainActivity : Activity() {
         main.removeCallbacks(hideInfo)
         chipRow.visibility = View.GONE
         infoHint.visibility = View.VISIBLE
-        infoBar.animate().alpha(0f).setDuration(250).start()
+        if (paused) fillInfo() else infoBar.animate().alpha(0f).setDuration(250).start()
     }
 
     // ---------------------------------------------------------------- the channel window
@@ -1189,7 +1344,7 @@ class MainActivity : Activity() {
             scopeName = shownName; scope = shown; prefs.scope = scopeName
             closeBrowse(false)
             lib?.let { prefs.last = it.keyOf(i) }
-            if (i != current) play(i) else { showInfo(); main.removeCallbacks(watched); main.postDelayed(watched, 30_000) }
+            if (i != current) play(i) else { commit(i); showInfo(); main.removeCallbacks(watched); main.postDelayed(watched, 30_000) }
         }
         chanList.setOnItemLongClickListener { _, _, p, _ ->
             val l = lib ?: return@setOnItemLongClickListener true
@@ -1380,6 +1535,8 @@ class MainActivity : Activity() {
     private lateinit var guideTitle: TextView
     private lateinit var guideList: ListView
     private var progs: List<Guide.Prog> = emptyList()
+    /** the channel whose programmes are listed is recorded: those of the days before are listed too and can be played */
+    private var guideRec = false
 
     private val guideAdapter = object : BaseAdapter() {
         override fun getCount() = progs.size
@@ -1389,7 +1546,7 @@ class MainActivity : Activity() {
             val row = (old as? LinearLayout) ?: LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(u(10), u(6), u(10), u(6))
-                addView(ui.label(12f, white(150)), LinearLayout.LayoutParams(u(46), -2))
+                addView(ui.label(11.5f, white(150)), LinearLayout.LayoutParams(u(70), -2))
                 val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
                 col.addView(ui.label(12.5f, Color.WHITE, lines = 2))
                 col.addView(ui.label(10.5f, white(150), lines = 3).apply { setLineSpacing(u(2).toFloat(), 1f) })
@@ -1398,9 +1555,9 @@ class MainActivity : Activity() {
             val g = progs[p]
             val t = System.currentTimeMillis()
             val on = g.start <= t && t < g.stop
-            (row.getChildAt(0) as TextView).apply { text = hm(g.start); setTextColor(if (on) accent else white(150)) }
+            (row.getChildAt(0) as TextView).apply { text = dayHm(g.start); setTextColor(if (on) accent else white(150)) }
             val col = row.getChildAt(1) as LinearLayout
-            (col.getChildAt(0) as TextView).apply { text = g.title; setTextColor(if (on) accent else if (g.stop <= t) white(110) else Color.WHITE) }
+            (col.getChildAt(0) as TextView).apply { text = g.title; setTextColor(if (on) accent else if (g.stop <= t) (if (guideRec) white(200) else white(110)) else Color.WHITE) }
             (col.getChildAt(1) as TextView).apply { text = g.desc; visibility = if (g.desc.isEmpty()) View.GONE else View.VISIBLE }
             return row
         }
@@ -1419,6 +1576,15 @@ class MainActivity : Activity() {
         guideList = list().apply { adapter = guideAdapter }
         guideBox.addView(guideList, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(guideBox, FrameLayout.LayoutParams(u(400), -1, Gravity.START))
+        // OK on a programme that is over, or is on: it plays from its beginning, where the channel is recorded
+        guideList.setOnItemClickListener { _, _, p, _ ->
+            val g = progs.getOrNull(p) ?: return@setOnItemClickListener
+            val rule = lib?.channels?.getOrNull(current)?.rec
+            val now = System.currentTimeMillis()
+            if (rule == null || !canShift() || g.start > now || g.start < now - rule.days * 86_400_000L + 120_000) return@setOnItemClickListener
+            hideGuide()
+            play(current, at = g.start)
+        }
         guideList.setOnKeyListener { _, k, ev ->
             when (k) {
                 KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) hideGuide(); true }
@@ -1433,17 +1599,19 @@ class MainActivity : Activity() {
     private fun showGuide(i: Int) {
         val l = lib ?: return
         main.removeCallbacks(hideInfo); infoBar.alpha = 0f
-        val name = l.channels[i].name.uppercase(Locale.getDefault())
+        val days = l.channels[i].rec?.days ?: 0
+        guideRec = i == current && canShift() && days > 0
+        val name = l.channels[i].name.uppercase(Locale.getDefault()) + (if (guideRec) "\nOK PLAYS A PROGRAMME FROM ITS BEGINNING  \u00B7  $days DAYS BACK" else "")
         guideTitle.text = name
         guideBox.visibility = View.VISIBLE
         progs = emptyList(); guideAdapter.notifyDataSetChanged()
         guideList.requestFocus()
         Thread({
-            val list = Repo.programmes(this, i)
+            val list = Repo.programmes(this, i, past = guideRec)
             main.post {
                 if (guideBox.visibility != View.VISIBLE) return@post
                 val t = System.currentTimeMillis()
-                progs = list.filter { it.stop > t - 2 * 3600_000 }
+                progs = list.filter { it.stop > t - (if (guideRec) days * 86_400_000L - 120_000 else 2 * 3600_000L) }
                 guideAdapter.notifyDataSetChanged()
                 if (progs.isEmpty()) { guideTitle.text = name + "\n\nNO PROGRAMME GUIDE FOR THIS CHANNEL"; return@post }
                 guideList.setSelectionFromTop(progs.indexOfFirst { it.stop > t }.coerceAtLeast(0), u(60))
@@ -1472,6 +1640,7 @@ class MainActivity : Activity() {
     private fun reload(force: Boolean) {
         if (browsing) closeBrowse(false)
         lib = null; current = -1
+        watchingIdx = -1; lastChannel = -1; shiftAt = 0L; paused = false; shiftProgsFor = -1
         player?.stop()
         say("Reading the playlist")
         Repo.start(this, force, { onChannels() }, { onGuide() })
@@ -1498,6 +1667,7 @@ class MainActivity : Activity() {
                     val l = Repo.lib
                     listOf("CHANNELS" to (if (l == null) (if (Repo.working) "Reading" else "None") else num(l.channels.size) + " in " + l.groups.size + " groups"),
                         "WITH A LOGO" to (if (l == null) "\u2014" else num(l.channels.indices.count { Repo.logo(it).isNotEmpty() })),
+                        "RECORDED" to (if (l == null) "\u2014" else if (Repo.recCount == 0) "None, the playlist names no recordings" else num(Repo.recCount) + " channels, up to " + Repo.recDays + " days back"),
                         "LAST FETCHED" to stamp(Repo.listTime(this)))
                 }, rows = listOf(
                 Page.Row("Playlist link", "The link from your provider", { if (prefs.playlist.isEmpty()) "Not set" else "Set" }, steps = false) {
@@ -1546,6 +1716,10 @@ class MainActivity : Activity() {
                 Page.Row("Refresh rate", "Auto: the TV is switched to the channel's rate, for even motion", { if (prefs.matchRate) "Auto" else "Off" }) {
                     prefs.matchRate = !prefs.matchRate
                     matchScreen()
+                },
+                Page.Row("Catch-up", "Earlier programmes, start over and pause, on channels the playlist says are recorded", { if (prefs.archive) "On" else "Off" }) {
+                    prefs.archive = !prefs.archive
+                    if (!prefs.archive && (shiftAt > 0L || paused) && current >= 0) play(current)
                 },
                 Page.Row("Up on the remote", "Which way Up and Down go through the channels", { if (prefs.upIsNext) "Next channel" else "Previous channel" }) {
                     prefs.upIsNext = !prefs.upIsNext
@@ -1605,6 +1779,18 @@ class MainActivity : Activity() {
             main.removeCallbacks(goTyped); main.postDelayed(goTyped, 1600)
             return true
         }
+        if (shiftAt > 0L || paused) {
+            // a recording, or a paused channel: Left / Right move in time, Back returns to what is on now (OK: see onKeyUp)
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> { shiftSeek(-60_000); return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { shiftSeek(60_000); return true }
+                KeyEvent.KEYCODE_BACK -> { play(current); return true }
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> { if (event.repeatCount == 0) togglePause(); return true }
+            }
+        } else when (keyCode) {
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PAUSE -> { if (event.repeatCount == 0) togglePause(); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { shiftSeek(-60_000); return true }
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_MEDIA_NEXT -> { zap(1); return true }
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { zap(-1); return true }
@@ -1615,7 +1801,8 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> { if (testStream == null) openSettings(); return true }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_GUIDE -> { if (lib != null && current >= 0 && testStream == null) showGuide(current); return true }
             KeyEvent.KEYCODE_INFO -> { if (infoBar.alpha > 0f) { main.removeCallbacks(hideInfo); hideInfo.run() } else showInfo(8000); return true }
-            KeyEvent.KEYCODE_BACK -> if (infoBar.alpha > 0.5f) { main.removeCallbacks(hideInfo); hideInfo.run(); return true }
+            // Back: the channel that was on before (with none, the bar goes, then the app is left)
+            KeyEvent.KEYCODE_BACK -> { if (swapLast()) return true; if (infoBar.alpha > 0.5f) { main.removeCallbacks(hideInfo); hideInfo.run(); return true } }
         }
         return super.onKeyDown(keyCode, event)
     }
@@ -1628,7 +1815,10 @@ class MainActivity : Activity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) && event.isTracking && !event.isCanceled && watching()) { openBrowse(); return true }
+        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) && event.isTracking && !event.isCanceled && watching()) {
+            if (shiftAt > 0L || paused) togglePause() else openBrowse()
+            return true
+        }
         return super.onKeyUp(keyCode, event)
     }
 

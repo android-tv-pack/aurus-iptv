@@ -53,5 +53,10 @@ class Prefs(ctx: Context) {
     val mended: Set<String> get() = lines("mended").toSet()
     fun addMended(key: String) { if (key.isNotEmpty() && key !in mended) put("mended", (lines("mended") + key).takeLast(200).joinToString("\n")) }
 
+    /** past programmes, start over and pause, on channels the playlist says are recorded */
+    var archive: Boolean get() = flag("archive", true); set(v) = put("archive", v)
+    /** the channel that was on before the one that plays (Back goes to it) */
+    var prev: String get() = str("prev"); set(v) = put("prev", v)
+
     var homeChannel: Long get() = p.getLong("homeChannel", 0L); set(v) { p.edit().putLong("homeChannel", v).apply() }
 }
