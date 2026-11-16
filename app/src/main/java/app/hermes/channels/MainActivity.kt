@@ -362,8 +362,51 @@ class MainActivity : Activity() {
     /** the sound's own times are not to be trusted on the channel that plays: it is timed by its length instead */
     @Volatile private var steadySound = false
 
-    /** reads the stream's pieces as usual, and puts picture and sound on one clock where a channel needs it ([Align]) */
-    private inner class Pieces(private val al: Align) : androidx.media3.exoplayer.hls.HlsExtractorFactory {
+    /**
+     * A sound a channel sends inside its picture stream. Broadcast channels often send several this way (a dubbing and
+     * the original, say). The player's reader for such streams hands on one of them only, so here they are noted as
+     * the stream lists them, and the one that is wanted is let through ([pick]).
+     */
+    private class Sound(val lang: String, val type: Int)
+    /** by channel, for this run: the sounds it sends, and the one chosen on it by hand */
+    private val soundsOf = HashMap<String, List<Sound>>()
+    private val soundPick = HashMap<String, Int>()
+    /** of the channel that plays */
+    private var sounds: List<Sound> = emptyList()
+    /** which of them is let through (-1: the stream is read the usual way, which gives the first) */
+    @Volatile private var pick = -1
+
+    private fun langOf(code: String): String = if (code.isEmpty() || code == "und") "" else (Util.normalizeLanguageCode(code) ?: code)
+    /** the sound to play on a channel: the one chosen on it by hand, else the one in the language chosen last, else the first */
+    private fun wantedSound(list: List<Sound>, key: String): Int {
+        soundPick[key]?.let { if (it < list.size) return it }
+        val want = langOf(prefs.audioLang)
+        if (want.isNotEmpty()) list.indexOfFirst { langOf(it.lang) == want }.let { if (it >= 0) return it }
+        return 0
+    }
+    private fun soundName(x: Sound, n: Int): String {
+        val code = langOf(x.lang)
+        val lang = if (code.isEmpty()) "" else Locale.forLanguageTag(code).displayLanguage.replaceFirstChar { it.uppercase() }
+        return lang.ifEmpty { "Track $n" }
+    }
+    private fun soundKind(type: Int) = when (type) { 0x03, 0x04 -> "MPEG"; 0x0F, 0x11 -> "AAC"; 0x81 -> "Dolby Digital"; 0x87, 0x84 -> "Dolby Digital Plus"; 0x82, 0x8A -> "DTS"; else -> "" }
+
+    /** the stream's reader found these sounds in the channel that plays */
+    private fun gotSounds(key: String, gen: Int, list: List<Sound>) {
+        if (gen != playGen || key != playKey || key.isEmpty() || list.size < 2) return
+        val known = soundsOf[key]
+        if (known == null || known.size != list.size) Log.i(tag, "#${current + 1} sends ${list.size} sounds: " + list.joinToString { langOf(it.lang).ifEmpty { "?" } + " " + soundKind(it.type) })
+        soundsOf[key] = list; sounds = list
+        // read the usual way, the first plays: another one is wanted (the language chosen last), so it is read again for that one
+        if (pick < 0 && wantedSound(list, key) != 0) play(current, true, browsing)
+        else if (optionsOpen) refreshChips()
+    }
+
+    /**
+     * Reads the stream's pieces: notes the sounds a channel sends and lets the wanted one through, and puts picture
+     * and sound on one clock where a channel needs it ([Align], only with [mend]).
+     */
+    private inner class Pieces(private val al: Align, private val mend: Boolean) : androidx.media3.exoplayer.hls.HlsExtractorFactory {
         private val usual = DefaultHlsExtractorFactory(tsFlags, true)
         // (subtitles: handled exactly as the usual factory is told to handle them)
         private var parser: androidx.media3.extractor.text.SubtitleParser.Factory = androidx.media3.extractor.text.DefaultSubtitleParserFactory()
@@ -375,13 +418,32 @@ class MainActivity : Activity() {
                                      timestampAdjuster: androidx.media3.common.util.TimestampAdjuster, responseHeaders: MutableMap<String, MutableList<String>>,
                                      sniffingExtractorInput: androidx.media3.extractor.ExtractorInput, playerId: androidx.media3.exoplayer.analytics.PlayerId): androidx.media3.exoplayer.hls.HlsMediaChunkExtractor {
             val piece = Any()
+            val only = pick; val key = playKey; val gen = playGen
+            // (as the usual reader is set up: captions sent inside the picture are offered, and what the list of pieces
+            // says the stream does not hold is not looked for)
+            var flags = tsFlags
+            val codecs = format.codecs
+            if (!codecs.isNullOrEmpty()) {
+                if (!androidx.media3.common.MimeTypes.containsCodecsCorrespondingToMimeType(codecs, androidx.media3.common.MimeTypes.AUDIO_AAC)) flags = flags or DefaultTsPayloadReaderFactory.FLAG_IGNORE_AAC_STREAM
+                if (!androidx.media3.common.MimeTypes.containsCodecsCorrespondingToMimeType(codecs, androidx.media3.common.MimeTypes.VIDEO_H264)) flags = flags or DefaultTsPayloadReaderFactory.FLAG_IGNORE_H264_STREAM
+            }
+            val captions = if (muxedCaptionFormats != null) { flags = flags or DefaultTsPayloadReaderFactory.FLAG_OVERRIDE_CAPTION_DESCRIPTORS; muxedCaptionFormats }
+                else listOf(Format.Builder().setSampleMimeType(androidx.media3.common.MimeTypes.APPLICATION_CEA608).build())
             val readers = object : androidx.media3.extractor.ts.TsPayloadReader.Factory {
-                val d = DefaultTsPayloadReaderFactory(tsFlags)
-                override fun createInitialPayloadReaders() = d.createInitialPayloadReaders()
+                val d = DefaultTsPayloadReaderFactory(flags, captions)
+                val found = ArrayList<Sound>()
+                val tell = Runnable { gotSounds(key, gen, synchronized(found) { found.toList() }) }
+                override fun createInitialPayloadReaders(): android.util.SparseArray<androidx.media3.extractor.ts.TsPayloadReader> { synchronized(found) { found.clear() }; return d.createInitialPayloadReaders() }
                 override fun createPayloadReader(streamType: Int, esInfo: androidx.media3.extractor.ts.TsPayloadReader.EsInfo): androidx.media3.extractor.ts.TsPayloadReader? {
+                    // the sounds, in the order the stream lists them; with one picked, the others are not read
+                    if (streamType == 0x03 || streamType == 0x04 || streamType == 0x0F || streamType == 0x11 || streamType == 0x81 || streamType == 0x87 || streamType == 0x84 || streamType == 0x82 || streamType == 0x8A) {
+                        val n = synchronized(found) { found.add(Sound(esInfo.language.orEmpty(), streamType)); found.size - 1 }
+                        main.removeCallbacks(tell); main.post(tell)
+                        if (only >= 0 && n != only) return null
+                    }
                     val r = d.createPayloadReader(streamType, esInfo) ?: return null
                     // (0x15 = notes beside the programme, 0x06 may be subtitles: neither has a part in this)
-                    if (streamType == 0x15 || streamType == 0x06 || "asis" in trial) return r
+                    if (!mend || streamType == 0x15 || streamType == 0x06 || "asis" in trial) return r
                     val isVideo = streamType == 0x01 || streamType == 0x02 || streamType == 0x10 || streamType == 0x1B || streamType == 0x24
                     return object : androidx.media3.extractor.ts.TsPayloadReader {
                         var logged = 0
@@ -428,13 +490,34 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            val ts = androidx.media3.extractor.ts.TsExtractor(androidx.media3.extractor.ts.TsExtractor.MODE_HLS,
+            // The usual way of reading keeps one stream of each kind, the first. With a sound picked, every stream is read
+            // by its own number and the factory above leaves out the sounds that are not wanted.
+            fun make() = androidx.media3.extractor.ts.TsExtractor(
+                if (only >= 0) androidx.media3.extractor.ts.TsExtractor.MODE_SINGLE_PMT else androidx.media3.extractor.ts.TsExtractor.MODE_HLS,
                 if (parse) 0 else androidx.media3.extractor.ts.TsExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA, parser, timestampAdjuster, readers,
                 androidx.media3.extractor.ts.TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES)
+            val ts = make()
             val isTs = try { ts.sniff(sniffingExtractorInput) } catch (_: java.io.EOFException) { false } finally { sniffingExtractorInput.resetPeekPosition() }
-            return if (isTs) androidx.media3.exoplayer.hls.BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster)
-            else usual.createExtractor(uri, format, muxedCaptionFormats, timestampAdjuster, responseHeaders, sniffingExtractorInput, playerId)
+            if (!isTs) return usual.createExtractor(uri, format, muxedCaptionFormats, timestampAdjuster, responseHeaders, sniffingExtractorInput, playerId)
+            if (only < 0) return androidx.media3.exoplayer.hls.BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster)
+            return OneSound(ts)
         }
+    }
+
+    /**
+     * A piece of the stream read with every stream under its own number. That way of reading is made for files: it
+     * would go looking through the piece for how long it lasts, which a piece that is still arriving does not allow.
+     * So the piece's length is kept from it.
+     */
+    private class OneSound(private val ts: androidx.media3.extractor.ts.TsExtractor) : androidx.media3.exoplayer.hls.HlsMediaChunkExtractor {
+        private val holder = androidx.media3.extractor.PositionHolder()
+        override fun init(output: androidx.media3.extractor.ExtractorOutput) = ts.init(output)
+        override fun read(input: androidx.media3.extractor.ExtractorInput): Boolean =
+            ts.read(object : androidx.media3.extractor.ForwardingExtractorInput(input) { override fun getLength() = C.LENGTH_UNSET.toLong() }, holder) == androidx.media3.extractor.Extractor.RESULT_CONTINUE
+        override fun isPackedAudioExtractor() = false
+        override fun isReusable() = true
+        override fun recreate(): androidx.media3.exoplayer.hls.HlsMediaChunkExtractor = this
+        override fun onTruncatedSegmentParsed() = ts.seek(0, 0)
     }
 
     /**
@@ -465,7 +548,7 @@ class MainActivity : Activity() {
     private fun source(address: String): MediaSource {
         val item = MediaItem.fromUri(address)
         return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
-            HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(if (mending && "stock" !in trial) Pieces(align) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+            HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(if ("stock" !in trial) Pieces(align, mending) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
         else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(patient).createMediaSource(item)
     }
 
@@ -868,6 +951,9 @@ class MainActivity : Activity() {
         if (!again) { settled = false; main.removeCallbacks(settle); if (!preview) main.postDelayed(settle, SETTLE_MS) }
         if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; rateKnown() } }
         mending = "mend" in trial || i in tryMend || playKey in prefs.mended
+        // a channel known to send several sounds: the wanted one is read from the start (the first needs no picking)
+        sounds = soundsOf[playKey].orEmpty()
+        pick = if (sounds.size > 1) wantedSound(sounds, playKey).let { if (it > 0) it else -1 } else -1
         findUnits = i in needUnits
         // a choice of sound or subtitles made on the channel before does not fit this one's tracks: the languages chosen last decide
         selector?.let { it.setParameters(it.buildUponParameters().clearOverridesOfType(C.TRACK_TYPE_AUDIO).clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -1285,7 +1371,15 @@ class MainActivity : Activity() {
         2 -> {
             val all = tracks(C.TRACK_TYPE_AUDIO)
             val at = all.indexOfFirst { it.selected }
-            if (all.isEmpty() || at < 0) "Sound   \u2014" else {
+            if (all.size < 2 && sounds.size > 1) {
+                // several sounds inside the picture stream: the player knows the one that is read only
+                val cur = if (pick < 0) 0 else pick.coerceAtMost(sounds.size - 1)
+                val x = sounds[cur]
+                val twin = sounds.any { it !== x && soundName(it, 0) == soundName(x, 0) }
+                val ch = all.firstOrNull()?.format?.channelCount ?: 0
+                val kind = when (ch) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> "" }
+                "Sound   " + soundName(x, cur + 1) + (if (kind.isNotEmpty()) " \u00B7 $kind" else "") + (if (twin && soundKind(x.type).isNotEmpty()) " \u00B7 " + soundKind(x.type) else "") + "   ${cur + 1} of ${sounds.size}"
+            } else if (all.isEmpty() || at < 0) "Sound   \u2014" else {
                 val f = all[at].format
                 val kind = when (f.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> "" }
                 // (tracks that read alike, as two in one language do, are told apart by how they are coded)
@@ -1324,6 +1418,17 @@ class MainActivity : Activity() {
             1 -> { closeOptions(); if (shiftAt > 0L || paused) play(current) else startOver() }
             2 -> {
                 val all = tracks(C.TRACK_TYPE_AUDIO)
+                if (all.size < 2 && sounds.size > 1 && playKey.isNotEmpty()) {
+                    // the next of the sounds inside the picture stream: the channel is read again for that one, and its
+                    // language is the one looked for on other channels from now on
+                    val next = ((if (pick < 0) 0 else pick) + 1) % sounds.size
+                    soundPick[playKey] = next
+                    langOf(sounds[next].lang).let { if (it.isNotEmpty()) prefs.audioLang = it }
+                    Log.i(tag, "#${current + 1} sound ${next + 1} of ${sounds.size} chosen")
+                    play(current, true, browsing)
+                    refreshChips()
+                    return
+                }
                 if (all.size < 2) return
                 val next = all[(all.indexOfFirst { it.selected } + 1) % all.size]
                 val lang = next.format.language.orEmpty()
