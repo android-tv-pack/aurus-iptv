@@ -133,6 +133,10 @@ class Prefs(ctx: Context) {
     /** a small clock stays in the corner while watching */
     var clock: Boolean get() = flag("clock", false); set(v) = put("clock", v)
     /** while a channel changes the screen is black (false: the last picture of the channel before stays) */
+    /** a channel sent in several qualities is shown in the best one from the start */
+    var bestQuality: Boolean get() = flag("bestQuality", false); set(v) = put("bestQuality", v)
+    /** Dolby sound is decoded by the device, not passed on as it is */
+    var decodeDolby: Boolean get() = flag("decodeDolby", false); set(v) = put("decodeDolby", v)
     var blackSwitch: Boolean get() = flag("blackSwitch", false); set(v) = put("blackSwitch", v)
     /** how see-through the bars over the picture are, in per cent (0 - 50) */
     var glass: Int get() = p.getInt("glass", 10).coerceIn(0, 50); set(v) { p.edit().putInt("glass", v.coerceIn(0, 50)).apply() }

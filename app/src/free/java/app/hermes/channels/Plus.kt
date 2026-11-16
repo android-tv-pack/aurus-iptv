@@ -44,6 +44,16 @@ object Plus {
     fun play(address: String, surface: android.view.SurfaceView) {}
     /** the other engine stops and lets the surface go */
     fun letGo() {}
+    /** while the other engine plays: what the channel is made of */
+    fun otherLine(): String = ""
+    /** while the other engine plays: what option [i] of the channel says; null = what the app says */
+    fun otherChip(i: Int): String? = null
+    /** while the other engine plays: OK on option [i]; true = seen to here */
+    fun otherStep(i: Int): Boolean = false
+    fun otherPause(on: Boolean) {}
+    /** the sound later (+) or earlier, in milliseconds */
+    fun otherDelay(ms: Int) {}
+
     /** the choice of engine among the channel's options; null = there is none */
     fun engineChip(key: String): String? = null
     fun engineStep(key: String) {}

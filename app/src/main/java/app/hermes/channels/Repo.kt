@@ -5,6 +5,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import app.hermes.channels.core.Portal
+import app.hermes.channels.core.Xtream
 import app.hermes.channels.core.Guide
 import app.hermes.channels.core.Library
 import app.hermes.channels.core.M3u
@@ -74,6 +76,37 @@ object Repo {
     }
     private fun text(address: String) = fetch(address).bufferedReader().use { it.readText() }
 
+    /** the name and password of a login were not accepted */
+    class Refused : java.io.IOException("login")
+
+    private fun textWith(address: String, headers: Map<String, String>): String {
+        val c = URL(address).openConnection() as HttpURLConnection
+        c.connectTimeout = 10000; c.readTimeout = 30000
+        for ((k, v) in headers) c.setRequestProperty(k, v)
+        if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
+        return c.inputStream.bufferedReader().use { it.readText() }
+    }
+
+    @Volatile private var portal: Portal? = null
+
+    /** the playlist behind [link]: the file at that address, or what a login's server lists, written out as a playlist */
+    private fun listText(link: String): String = when {
+        Xtream.isLogin(link) -> {
+            val info = text(link)
+            if (!Xtream.accepted(info)) throw Refused()
+            Xtream.toM3u(link, info, text(Xtream.categories(link)), text(Xtream.streams(link)))
+        }
+        Portal.isLogin(link) -> Portal(link, ::textWith).let { it.login(); portal = it; it.m3u() }
+        else -> text(link)
+    }
+
+    /** the address a portal's channel plays from right now (asks the portal: not for the main thread) */
+    fun portalAddress(ctx: Context, channel: String): String {
+        val link = Prefs(ctx.applicationContext).playlist
+        val p = portal?.takeIf { it.link == link } ?: Portal(link, ::textWith).also { portal = it }
+        return p.address(channel)
+    }
+
     private fun listFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "playlist${tail(s)}.m3u")
     private fun extraFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "extra${tail(s)}.m3u")
     private fun chanFile(ctx: Context, s: Int = src) = File(ctx.filesDir, "guide-channels${tail(s)}.tsv")
@@ -136,7 +169,7 @@ object Repo {
                 val stale = force || !lf.exists() || System.currentTimeMillis() - lf.lastModified() > FRESH_MS
                 var own: String? = if (lf.exists() && !force) lf.readText() else null
                 var fetched = false
-                if (own == null) { own = text(link); lf.writeText(own); fetched = true }
+                if (own == null) { own = listText(link); lf.writeText(own); fetched = true }
                 var other: String? = if (ef.exists() && !force) ef.readText() else null
                 if (other == null && extraLink.isNotEmpty()) other = try { text(extraLink).also { ef.writeText(it) } } catch (_: Exception) { null }
                 val merged = M3u.merge(M3u.parse(own), other?.let { M3u.parse(it) })
@@ -151,14 +184,14 @@ object Repo {
                 main.post(readyG)
                 // an old copy is replaced for the next start
                 if (stale && !fetched) try {
-                    val fresh = text(link)
+                    val fresh = listText(link)
                     if (M3u.parse(fresh).channels.isNotEmpty()) lf.writeText(fresh)
                     if (extraLink.isNotEmpty()) text(extraLink).let { if (it.isNotEmpty()) ef.writeText(it) }
                 } catch (_: Exception) {}
                 guideWork(app, force, guideG, s, g)
             } catch (e: Exception) {
                 Log.w(TAG, "playlist failed: ${e.javaClass.simpleName}")
-                if (g == gen) error = "failed"
+                if (g == gen) error = if (e is Refused) "login" else "failed"
                 main.post(readyG)
             } finally { if (worker === me) worker = null }
         }, "channels-list").start()

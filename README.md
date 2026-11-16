@@ -87,3 +87,5 @@ MIT, see [LICENSE](LICENSE).
 If this project is useful to you, you can support its development:
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G0U5290K4T)
+
+The licences of what the app is built with are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

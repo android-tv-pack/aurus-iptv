@@ -22,6 +22,9 @@ interface PlusHost {
     fun restyle()
     /** the focus goes back to where it was before a sheet */
     fun refocus()
+    /** the favourites and the channels watched last (their places in the playlist), without those that are not shown */
+    fun favourites(): List<Int>
+    fun recent(): List<Int>
     /** which channels are shown has changed */
     fun relist()
     /** plays the channel that is on once more (the way it is played has changed) */

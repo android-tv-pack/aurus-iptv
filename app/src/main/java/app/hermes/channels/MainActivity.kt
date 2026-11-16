@@ -53,6 +53,8 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import app.hermes.channels.core.Guide
 import app.hermes.channels.core.Library
 import app.hermes.channels.core.Catchup
+import app.hermes.channels.core.Portal
+import app.hermes.channels.core.Xtream
 import app.hermes.channels.core.M3u
 import app.hermes.channels.core.Rate
 import app.hermes.channels.core.Stamp
@@ -274,7 +276,11 @@ class MainActivity : Activity() {
     private fun onChannels() {
         val l = Repo.lib
         if (l == null) {
-            say(if (Repo.error == "none") "No playlist yet.\nPress MENU or OK for the settings to give its link." else "Could not read the playlist.\nPress MENU or OK for the settings to try again.")
+            say(when (Repo.error) {
+                "none" -> "No playlist yet.\nPress MENU or OK for the settings to give its link."
+                "login" -> "The server did not accept the name and password.\nPress MENU or OK for the settings to give them again."
+                else -> "Could not read the playlist.\nPress MENU or OK for the settings to try again."
+            })
             lib = null
             page.refresh()
             return
@@ -598,6 +604,7 @@ class MainActivity : Activity() {
      * many pictures a second, how much data a second, and the sound. It is what the provider sends; the app plays it as it is.
      */
     private fun techLine(): String {
+        if (other) return Plus.otherLine()
         val p = player ?: return ""
         val parts = ArrayList<String>()
         val v = p.videoFormat ?: tracks(C.TRACK_TYPE_VIDEO).firstOrNull { it.selected }?.format
@@ -724,6 +731,10 @@ class MainActivity : Activity() {
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? {
             val sink = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams) ?: return null
             return object : ForwardingAudioSink(sink) {
+                // Dolby sound decoded here, where that is chosen and the device can: the output is then said not to take it as it is
+                private fun kept(f: Format) = prefs.decodeDolby && canDecodeDolby && (f.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_AC3 || f.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_E_AC3 || f.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC)
+                override fun supportsFormat(format: Format) = if (kept(format)) false else super.supportsFormat(format)
+                override fun getFormatSupport(format: Format) = if (kept(format)) AudioSink.SINK_FORMAT_UNSUPPORTED else super.getFormatSupport(format)
                 // for a channel whose sound carries wrong times: each piece of sound follows the one before
                 private var perSecond = 0L          // bytes of sound a second (0: not plain sound, its length is not known here)
                 private var unitUs = 0L             // else: how long one unit of coded sound lasts
@@ -766,7 +777,7 @@ class MainActivity : Activity() {
         sel.setParameters(sel.buildUponParameters().setTunnelingEnabled(tunnel)
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, "nosound" in trial).setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, "nopicture" in trial)
             .setPreferredAudioLanguage(prefs.audioLang.ifEmpty { null }).setPreferredTextLanguage(prefs.subLang.ifEmpty { null })
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty()))
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, prefs.subLang.isEmpty()).setForceHighestSupportedBitrate(prefs.bestQuality))
         // a channel starts to move with 0.8 s in hand (the usual 2.5 s showed its first picture standing still for a second; with
         // 0.3 s a channel whose server is slow to begin moved, then stopped again at once); after a stall it takes more in hand
         val load = androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(20_000, 50_000, 800, 2_500).build()
@@ -1027,32 +1038,44 @@ class MainActivity : Activity() {
         if (prefs.blackSwitch) shade.visibility = View.VISIBLE
         val nowSec = System.currentTimeMillis() / 1000
         // (an address in a form there is no reader for must not take the app down: the channel is said not to play)
-        val address = if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url
-        // (an extra) a channel that is played by another engine: the app's own player lets the surface go and waits
-        if (playKey.isNotEmpty() && Plus.takes(playKey)) {
-            main.removeCallbacks(probe); main.removeCallbacks(tunnelCheck); main.removeCallbacks(settle)
+        val gen = playGen
+        fun go(address: String) {
+            // (an extra) a channel that is played by another engine: the app's own player lets the surface go and waits
+            if (playKey.isNotEmpty() && Plus.takes(playKey)) {
+                main.removeCallbacks(probe); main.removeCallbacks(tunnelCheck); main.removeCallbacks(settle)
+                p.stop()
+                if (!other) { other = true; p.clearVideoSurface() }
+                shade.visibility = View.VISIBLE
+                Plus.play(address, surface)
+                return
+            }
+            if (other) { other = false; Plus.letGo(); p.setVideoSurfaceView(surface) }
+            val src = try { source(address) } catch (e: Exception) {
+                Log.w(tag, "#${i + 1} no reader for this kind of address (${e.cause?.javaClass?.simpleName ?: e.javaClass.simpleName})")
+                p.stop()
+                shade.visibility = View.VISIBLE
+                say("This channel is sent in a form the app cannot play.")
+                return
+            }
+            // the decoder of the channel before is let go, not handed on: handed on, the box's decoder stumbled over a channel
+            // of another picture size, which cost half a second and a second start
             p.stop()
-            if (!other) { other = true; p.clearVideoSurface() }
-            shade.visibility = View.VISIBLE
-            Plus.play(address, surface)
-            return
+            // (the sound comes in over a moment, not at once: at once it can click)
+            fader?.cancel(); p.volume = 0f; faded = false
+            p.setMediaSource(src)
+            p.prepare()
+            p.playWhenReady = true
         }
-        if (other) { other = false; Plus.letGo(); p.setVideoSurfaceView(surface) }
-        val src = try { source(address) } catch (e: Exception) {
-            Log.w(tag, "#${i + 1} no reader for this kind of address (${e.cause?.javaClass?.simpleName ?: e.javaClass.simpleName})")
-            p.stop()
-            shade.visibility = View.VISIBLE
-            say("This channel is sent in a form the app cannot play.")
-            return
-        }
-        // the decoder of the channel before is let go, not handed on: handed on, the box's decoder stumbled over a channel
-        // of another picture size, which cost half a second and a second start
-        p.stop()
-        // (the sound comes in over a moment, not at once: at once it can click)
-        fader?.cancel(); p.volume = 0f; faded = false
-        p.setMediaSource(src)
-        p.prepare()
-        p.playWhenReady = true
+        // a portal's channel: the address it plays from is asked for now, each time
+        if (c.url.startsWith(Portal.SCHEME)) {
+            Thread({
+                val a = try { Repo.portalAddress(this, c.url) } catch (e: Exception) { Log.w(tag, "#${i + 1} the portal gave no address (${e.javaClass.simpleName})"); null }
+                main.post {
+                    if (gen != playGen || player !== p) return@post
+                    if (a != null) go(a) else { p.stop(); shade.visibility = View.VISIBLE; say("The portal gave no address for this channel.\nIt is tried again shortly."); later() }
+                }
+            }, "channels-portal").start()
+        } else go(if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url)
     }
 
     /** the channels of the list [id], without those that are not to be shown */
@@ -1060,6 +1083,12 @@ class MainActivity : Activity() {
         val l = lib ?: return emptyList()
         val all = l.list(id, favs, recents)
         return if (Plus.PRESENT) all.filter { !Plus.hides(l.channels[it]) } else all
+    }
+
+    /** the device has a decoder of its own for Dolby sound */
+    private val canDecodeDolby by lazy {
+        try { androidx.media3.exoplayer.mediacodec.MediaCodecUtil.getDecoderInfos(androidx.media3.common.MimeTypes.AUDIO_AC3, false, false).isNotEmpty() &&
+            androidx.media3.exoplayer.mediacodec.MediaCodecUtil.getDecoderInfos(androidx.media3.common.MimeTypes.AUDIO_E_AC3, false, false).isNotEmpty() } catch (e: Exception) { false }
     }
 
     // ---- the sound comes and goes over a moment (leaving the app, coming back, a new channel): cut off at once it can click
@@ -1125,6 +1154,8 @@ class MainActivity : Activity() {
                 HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
             else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(patient).createMediaSource(item)
         }
+        override fun favourites(): List<Int> = listed(Library.FAVS)
+        override fun recent(): List<Int> = listed(Library.RECENT)
         override fun relist() {
             val l = lib ?: return
             scope = listed(scopeName).ifEmpty { scopeName = Library.ALL; listed(Library.ALL) }
@@ -1470,14 +1501,14 @@ class MainActivity : Activity() {
             paused = true
             pausedAt = if (shiftAt > 0L) shiftAt else System.currentTimeMillis()
             pausedSince = SystemClock.elapsedRealtime()
-            p.pause()
+            if (other) Plus.otherPause(true) else p.pause()
             if (shiftProgsFor != current) loadShiftProgs(current)
             showInfo()
         } else {
             val stood = SystemClock.elapsedRealtime() - pausedSince
             // after a moment's pause what was fetched plays on; after a longer one it is asked for again from where it stopped
             val back = prefs.resumeBack * 1000L
-            if (stood < 8000 && back == 0L) { paused = false; p.play(); showInfo() } else play(current, at = pausedAt - back)
+            if (stood < 8000 && back == 0L) { paused = false; if (other) Plus.otherPause(false) else p.play(); showInfo() } else play(current, at = pausedAt - back)
         }
     }
 
@@ -1571,7 +1602,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshChips() {
-        for ((i, c) in chips.withIndex()) c.text = chipText(i)
+        for ((i, c) in chips.withIndex()) c.text = (if (other) Plus.otherChip(i) else null) ?: chipText(i)
         // pausing and starting over need the channel to be recorded
         val rec = canShift()
         chips[0].visibility = if (rec) View.VISIBLE else View.GONE
@@ -1583,6 +1614,7 @@ class MainActivity : Activity() {
 
     /** OK on a choice goes to its next value */
     private fun step(i: Int) {
+        if (other && Plus.otherStep(i)) return
         val sel = selector ?: return
         when (i) {
             0 -> { closeOptions(); togglePause() }
@@ -2282,18 +2314,50 @@ class MainActivity : Activity() {
     }
 
     private fun addSource() {
-        val sh = Sheet(ui, "Add a playlist", "Paste or type the link of the playlist (M3U). It is added to your playlists as \u201CPlaylist ${prefs.sources.size + 1}\u201D and watched at once; you can rename it afterwards.")
-        val e = sh.input("", "The link of the playlist (.m3u or .m3u8)", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        sh.button("Cancel").button("Add", primary = true) {
-            val v = e.text.toString().trim()
-            if (v.isEmpty()) return@button
-            val id = prefs.addSource()
-            prefs.source = id
-            Repo.switchTo(id)
-            prefs.playlist = v
-            switchSource(id)
-            reopenSettings()
-        }.show { if (page.isOpen) page.focus() }
+        val n = prefs.sources.size + 1
+        Sheet(ui, "Add a playlist", "What were you given for your channels? It is added to your playlists as \u201CPlaylist $n\u201D and watched at once; you can rename it afterwards.")
+            .item("A link", { "M3U playlist" }) { addLink() }
+            .item("A server, a name and a password", { "Xtream Codes" }) { addXtream() }
+            .item("A portal and a MAC address", { "Stalker, Ministra" }) { addPortal() }
+            .button("Cancel").show { if (page.isOpen) page.focus() }
+    }
+
+    /** the playlist behind [link] is added and watched */
+    private fun added(link: String) {
+        val id = prefs.addSource()
+        prefs.source = id
+        Repo.switchTo(id)
+        prefs.playlist = link
+        switchSource(id)
+        reopenSettings()
+    }
+
+    /** one thing asked for, on a sheet of its own; [then] gets what was typed, when it is not empty */
+    private fun ask(title: String, text: String, hint: String, type: Int, next: String, then: (String) -> Unit) {
+        val sh = Sheet(ui, title, text)
+        val e = sh.input("", hint, type)
+        sh.button("Cancel").button(next, primary = true) { e.text.toString().trim().let { if (it.isNotEmpty()) then(it) } }.show { if (page.isOpen) page.focus() }
+    }
+
+    private fun addLink() = ask("Add a playlist", "Paste or type the link of the playlist (M3U).", "The link of the playlist (.m3u or .m3u8)", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI, "Add") { added(it) }
+
+    private fun addXtream() {
+        val plain = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        ask("Xtream Codes  \u00B7  1 of 3", "The address of the server, as your provider gave it.", "http://server.example:8080", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI, "Next") { server ->
+            ask("Xtream Codes  \u00B7  2 of 3", "Your user name.", "User name", plain, "Next") { user ->
+                ask("Xtream Codes  \u00B7  3 of 3", "Your password. It is kept on this device only.", "Password", plain, "Add") { pass -> added(Xtream.link(server, user, pass)) }
+            }
+        }
+    }
+
+    private fun addPortal() {
+        ask("Portal  \u00B7  1 of 2", "The address of the portal, as your provider gave it.", "http://portal.example/c/", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI, "Next") { address ->
+            ask("Portal  \u00B7  2 of 2", "The MAC address your provider has registered for you: twelve letters and digits.", "00:1A:79:00:00:00", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, "Add") { typed ->
+                val mac = Portal.mac(typed)
+                if (mac == null) Sheet(ui, "That is not a MAC address", "It has twelve letters and digits, such as 00:1A:79:12:34:56.").button("Close", primary = true).show { if (page.isOpen) page.focus() }
+                else added(Portal.link(address, mac))
+            }
+        }
     }
 
     private fun reload(force: Boolean) {
@@ -2500,6 +2564,17 @@ class MainActivity : Activity() {
                     noTunnel.clear()
                     if (current >= 0) play(current, true)
                 },
+                Page.Row("Quality", "Of channels sent in several: follow the connection, or the best",
+                    { if (prefs.bestQuality) "Always the highest" else "Automatic" }) {
+                    prefs.bestQuality = !prefs.bestQuality
+                    selector?.let { it.setParameters(it.buildUponParameters().setForceHighestSupportedBitrate(prefs.bestQuality)) }
+                    if (current >= 0) play(current, true)
+                },
+                Page.Row("Dolby sound", "Passed on to the TV as it is, or decoded here to stereo",
+                    { if (!prefs.decodeDolby) "Passed on" else if (canDecodeDolby) "Decoded here" else "Decoded here (this device cannot: passed on)" }) {
+                    prefs.decodeDolby = !prefs.decodeDolby
+                    if (current >= 0) play(current, true)
+                },
                 Page.Row("Sound delay", "+ plays the sound later, \u2212 earlier. If you hear the words before the lips move (the picture is late), add", {
                     (if (prefs.soundDelay > 0) "+" else "") + prefs.soundDelay + " ms" }, { !prefs.hardwareSync }) { d ->
                     // small steps near nought, larger ones further out (some TVs show the picture a second late)
@@ -2507,6 +2582,7 @@ class MainActivity : Activity() {
                     val step = if (kotlin.math.abs(v + d) < 200) 20 else 100
                     prefs.soundDelay = if (step == 100) (v + 100 * d) / 100 * 100 else v + 20 * d
                     delayUs = prefs.soundDelay * 1000L
+                    if (other) Plus.otherDelay(prefs.soundDelay)
                 },
                 Page.Row("Refresh rate", "The TV is switched to the channel's rate, for even motion. It goes dark for a moment each time it switches",
                     { if (!prefs.matchRate) "Off" else if (prefs.rateWait) "Auto, once you stay on a channel" else "Auto, at once" }) { d ->
@@ -2577,7 +2653,8 @@ class MainActivity : Activity() {
                 Page.Row("Open-source parts", "What the app is built with", { "" }, steps = false) {
                     Sheet(ui, "Open-source parts", "AndroidX Media3 (ExoPlayer), by The Android Open Source Project, under the Apache License 2.0.\n\n" +
                         "Kotlin, by JetBrains and contributors, under the Apache License 2.0.\n\n" +
-                        "The MPEG Layer II sound decoder follows pl_mpeg by Dominic Szablewski (MIT licence), itself based on kjmp2 by Martin J. Fiedler.")
+                        "The MPEG Layer II sound decoder follows pl_mpeg by Dominic Szablewski (MIT licence), itself based on kjmp2 by Martin J. Fiedler.\n\n" +
+                        "The full licences: github.com/android-tv-pack/aurus-iptv, THIRD-PARTY-NOTICES.md")
                         .button("Close", primary = true).show { page.focus() }
                 }
             ))
@@ -2614,6 +2691,7 @@ class MainActivity : Activity() {
                 if (chips[5].isFocused) {
                     prefs.soundDelay = prefs.soundDelay + (if (keyCode == KeyEvent.KEYCODE_DPAD_UP) 20 else -20)
                     delayUs = prefs.soundDelay * 1000L
+                    if (other) Plus.otherDelay(prefs.soundDelay)
                     say(""); refreshChips()
                 }
                 return true
