@@ -435,6 +435,7 @@ class MainActivity : Activity() {
                 val tell = Runnable { gotSounds(key, gen, synchronized(found) { found.toList() }) }
                 override fun createInitialPayloadReaders(): android.util.SparseArray<androidx.media3.extractor.ts.TsPayloadReader> { synchronized(found) { found.clear() }; return d.createInitialPayloadReaders() }
                 override fun createPayloadReader(streamType: Int, esInfo: androidx.media3.extractor.ts.TsPayloadReader.EsInfo): androidx.media3.extractor.ts.TsPayloadReader? {
+                    if (Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "the stream lists kind 0x${Integer.toHexString(streamType)} ${esInfo.language.orEmpty()} (${esInfo.descriptorBytes.size} bytes of notes)")
                     // the sounds, in the order the stream lists them; with one picked, the others are not read
                     if (streamType == 0x03 || streamType == 0x04 || streamType == 0x0F || streamType == 0x11 || streamType == 0x81 || streamType == 0x87 || streamType == 0x84 || streamType == 0x82 || streamType == 0x8A) {
                         val n = synchronized(found) { found.add(Sound(esInfo.language.orEmpty(), streamType)); found.size - 1 }
@@ -563,6 +564,8 @@ class MainActivity : Activity() {
     private var formatLine = ""
     /** how much of the channel arrives for each second it plays, in kbit (from the pieces fetched; 0 = not known yet) */
     private var streamKbps = 0L
+    /** the channel that plays is sent with a picture only */
+    private var noSound = false
 
     /**
      * What the channel that plays is made of, in one line: the picture's size, how it is coded, whether it is HDR, how
@@ -586,6 +589,7 @@ class MainActivity : Activity() {
             val ch = when (a.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> "" }
             listOf(kind, ch).filter { it.isNotEmpty() }.joinToString(" ").let { if (it.isNotEmpty()) parts += it }
         }
+        if (a == null && noSound) parts += "no sound is sent"
         return parts.joinToString("  \u00B7  ")
     }
 
@@ -966,6 +970,7 @@ class MainActivity : Activity() {
         formatLine = ""
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
         waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) { gaveUp = false; slowPieces = 0; slowSaid = false; streamKbps = 0L }
+        noSound = false
         main.removeCallbacks(tryLater); laterPending = false
         playGen++
         startedAt = SystemClock.elapsedRealtime()
@@ -1059,6 +1064,11 @@ class MainActivity : Activity() {
             if (infoBar.alpha > 0f) fillInfo()
             val sounds = tracks(C.TRACK_TYPE_AUDIO).size; val subs = tracks(C.TRACK_TYPE_TEXT).size
             if (sounds > 1 || subs > 0) Log.i(tag, "#${current + 1} tracks: $sounds sound, $subs subtitles")
+            // a channel sent without any sound (seen on a 4K channel for a time): said, so that it is not taken for a fault of the player
+            if (sounds == 0 && t.groups.none { it.type == C.TRACK_TYPE_AUDIO } && t.groups.any { it.type == C.TRACK_TYPE_VIDEO }) {
+                Log.w(tag, "#${current + 1} is sent without sound")
+                noSound = true
+            }
             if (optionsOpen) refreshChips()
             page.refresh()
         }
