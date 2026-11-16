@@ -636,6 +636,14 @@ class MainActivity : Activity() {
         // (DEBUG) which pieces of the stream were fetched, and the times they carry: never their addresses
         p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             override fun onLoadCompleted(t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, l: androidx.media3.exoplayer.source.LoadEventInfo, d: androidx.media3.exoplayer.source.MediaLoadData) {
+                // pieces that take as long to arrive as they last: the connection is no faster than the channel
+                val lasts = d.mediaEndTimeMs - d.mediaStartTimeMs
+                if (d.dataType == C.DATA_TYPE_MEDIA && lasts > 0 && d.mediaStartTimeMs >= 0) {
+                    if (l.loadDurationMs > 2000 && l.loadDurationMs >= lasts * 9 / 10) {
+                        slowPieces++
+                        if (slowPieces == 2) Log.w(tag, "#${current + 1} the connection is no faster than the channel: ${l.bytesLoaded * 8 / l.loadDurationMs} kbit/s arrive, the channel is ${l.bytesLoaded * 8 / lasts} kbit/s")
+                    } else if (l.loadDurationMs < lasts / 2) slowPieces = 0
+                }
                 if (Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "#${current + 1} piece type=${d.dataType} track=${d.trackType} ${d.trackFormat?.codecs ?: ""} ${d.trackFormat?.containerMimeType ?: ""} " +
                     "from ${d.mediaStartTimeMs} to ${d.mediaEndTimeMs} ms, ${l.bytesLoaded / 1024} KB in ${l.loadDurationMs} ms")
             }
@@ -656,6 +664,16 @@ class MainActivity : Activity() {
     private var waitSince = 0L
     private var goodSince = 0L
     private var gaveUp = false
+    /** pieces in a row that arrived no faster than they play, and whether the screen has said so on this channel */
+    private var slowPieces = 0
+    private var slowSaid = false
+    private val unsay = Runnable { if (note.text.startsWith("The connection is slower")) say("") }
+    private fun saySlow() {
+        if (slowSaid) return
+        slowSaid = true
+        say("The connection is slower than this channel needs.\nThe picture will stop now and then.")
+        main.removeCallbacks(unsay); main.postDelayed(unsay, 8000)
+    }
     /** a channel that was given up is tried again every 20 s for as long as it is on, so that it plays once its server does */
     private var laterPending = false
     private val tryLater = Runnable { laterPending = false; if (current >= 0 && player != null) { Log.i(tag, "#${current + 1} trying the channel again"); play(current, true, browsing) } }
@@ -833,7 +851,7 @@ class MainActivity : Activity() {
         firstPicture = false
         formatLine = ""
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
-        waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) gaveUp = false
+        waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) { gaveUp = false; slowPieces = 0; slowSaid = false }
         main.removeCallbacks(tryLater); laterPending = false
         playGen++
         startedAt = SystemClock.elapsedRealtime()
@@ -885,6 +903,7 @@ class MainActivity : Activity() {
         override fun onPlaybackStateChanged(state: Int) {
             val name = when (state) { Player.STATE_BUFFERING -> "buffering"; Player.STATE_READY -> "ready"; Player.STATE_ENDED -> "ended"; else -> "idle" }
             Log.i(tag, "#${current + 1} $name after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            if (state == Player.STATE_BUFFERING && firstPicture && slowPieces >= 2) saySlow()
         }
         override fun onRenderedFirstFrame() {
             shade.visibility = View.GONE
@@ -933,7 +952,15 @@ class MainActivity : Activity() {
                 val path = x.dataSpec.uri.path.orEmpty()
                 " HTTP ${x.responseCode} for " + (if (path.endsWith(".m3u8") || path.endsWith(".m3u")) "the list" else "a piece") + " at byte ${x.dataSpec.position}"
             }.orEmpty()
-            Log.w(tag, "#${current + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})$http" + (if (retries < (if (e.errorCode in 2000..2999) 5 else 2)) ", trying again" else ""))
+            // A live channel whose playing fell behind what the server still keeps (a connection slower than the channel,
+            // a long pause): there is nothing wrong with the channel, it goes on from what is on now. Never given up on.
+            if (e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && shiftAt == 0L) {
+                Log.w(tag, "#${current + 1} fell behind what the server keeps: going on from what is on now")
+                if (slowPieces >= 2) saySlow()
+                play(current, true, browsing)
+                return
+            }
+            Log.w(tag, "#${current + 1} error ${e.errorCodeName} (${e.cause?.javaClass?.simpleName})$http" + (if (retries < (if (e.errorCode in 2000..2999) 5 else 2)) ", trying again" else ", trying again every 20 s"))
             // a decoder that stumbles while channels are changed, or a live stream that moved on, plays at the next try;
             // the second try is without the hardware keeping step, in case that is what it stumbles over
             // (a server or a network that does not answer gets more tries, further apart, and the screen says what goes on)
@@ -947,8 +974,9 @@ class MainActivity : Activity() {
             }
             // (the last picture of the channel before would stay under the words)
             shade.visibility = View.VISIBLE
-            say(if (shiftAt > 0L) "This channel has no recording of that time.\nBack returns to what is on now." else if (net) "This channel's server is not delivering right now.\nThe app keeps trying." else "This channel does not play right now.")
-            if (net && shiftAt == 0L) later()
+            say(if (shiftAt > 0L) "This channel has no recording of that time.\nBack returns to what is on now." else if (net) "This channel's server is not delivering right now.\nThe app keeps trying." else "This channel does not play right now.\nThe app keeps trying.")
+            // (whatever it was that failed, the channel is tried again every 20 s for as long as it stays on)
+            if (shiftAt == 0L) later()
         }
     }
 
