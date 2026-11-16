@@ -1099,7 +1099,15 @@ class MainActivity : Activity() {
         cues.show(emptyList())
         pictureMode = prefs.picture(l.keyOf(i))
         placeSurface()
-        if (prefs.blackSwitch) shade.visibility = View.VISIBLE
+        // what is seen until the new channel's picture comes: the last picture, black, or the last picture going dark
+        when (prefs.changeLook) {
+            1 -> { shade.animate().cancel(); shade.alpha = 1f; shade.visibility = View.VISIBLE }
+            2 -> if (!preview) {
+                shade.animate().cancel()
+                if (shade.visibility != View.VISIBLE) { shade.alpha = 0f; shade.visibility = View.VISIBLE }
+                shade.animate().alpha(1f).setDuration(140).setListener(null).start()
+            }
+        }
         val nowSec = System.currentTimeMillis() / 1000
         // (an address in a form there is no reader for must not take the app down: the channel is said not to play)
         val gen = playGen
@@ -1269,7 +1277,7 @@ class MainActivity : Activity() {
         override fun restyle() = this@MainActivity.restyle()
         override fun refocus() { if (page.isOpen) { page.refresh(); page.focus() } else if (guideBox.visibility == View.VISIBLE) guideList.requestFocus() else if (browsing) groupList.requestFocus() }
         override fun replay() { if (current >= 0) play(current, true) }
-        override fun picture() { shade.visibility = View.GONE; firstPicture = true; this@MainActivity.say("") }
+        override fun picture() { uncover(); firstPicture = true; this@MainActivity.say("") }
         override fun hold(on: Boolean) {
             held = on
             if (on) {
@@ -1303,6 +1311,18 @@ class MainActivity : Activity() {
         }
     }
 
+    /** the new channel's picture is there: it is shown at once, or (with the soft change) comes up out of the dark */
+    private fun uncover() {
+        shade.animate().cancel()
+        if (prefs.changeLook == 2 && shade.visibility == View.VISIBLE && !browsing) {
+            shade.animate().alpha(0f).setDuration(280).setListener(object : android.animation.AnimatorListenerAdapter() {
+                private var off = false
+                override fun onAnimationCancel(a: android.animation.Animator) { off = true }
+                override fun onAnimationEnd(a: android.animation.Animator) { if (!off) { shade.visibility = View.GONE; shade.alpha = 1f } }
+            }).start()
+        } else { shade.visibility = View.GONE; shade.alpha = 1f }
+    }
+
     private fun zap(step: Int) {
         val l = lib ?: return
         if (scope.size < 2 && current in scope) return
@@ -1317,7 +1337,7 @@ class MainActivity : Activity() {
             if (state == Player.STATE_READY && !faded) { faded = true; fadeTo(1f, 220) }
         }
         override fun onRenderedFirstFrame() {
-            shade.visibility = View.GONE
+            uncover()
             if (!sleepWarned) say("")
             firstPicture = true
             Log.i(tag, "#${current + 1} first picture after ${SystemClock.elapsedRealtime() - startedAt} ms")
@@ -2767,8 +2787,8 @@ class MainActivity : Activity() {
                 subRow("Subtitle letters", "Plain, with serifs, all of one width, or narrow", 5, arrayOf("Plain", "Serif", "Typewriter", "Narrow")),
                 subRow("Subtitle background", "A dark edge round the letters, or a dark plate behind them", 2, arrayOf("Edge", "Plate")),
                 subRow("Subtitle height", "Higher, where the TV cuts off the bottom edge", 3, arrayOf("Bottom", "Higher", "Higher still")),
-                Page.Row("While a channel changes", "What is seen until the new channel's picture comes", { if (prefs.blackSwitch) "Black screen" else "Last picture" }) {
-                    prefs.blackSwitch = !prefs.blackSwitch
+                Page.Row("While a channel changes", "Until the new picture comes: the last one stays, black, or a soft fade", { arrayOf("Last picture", "Black screen", "Fade")[prefs.changeLook] }) { d ->
+                    prefs.changeLook = (prefs.changeLook + (if (d == 0) 1 else d) + 3) % 3
                 },
                 Page.Row("Small window in the channel list", "What plays there while you move through the channels", { if (prefs.previewFocus) "The channel in focus" else "The channel you watch" }) {
                     prefs.previewFocus = !prefs.previewFocus

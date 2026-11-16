@@ -145,6 +145,8 @@ class Prefs(ctx: Context) {
     /** the look of subtitles sent as text: size, colour, background, height, weight, kind of letters (see CueView) */
     var subLook: List<Int> get() = listOf(1, 0, 0, 0, 2, 0).let { usual -> val l = str("subLook").split(',').mapNotNull { it.toIntOrNull() }; List(usual.size) { l.getOrNull(it) ?: usual[it] } }
         set(v) = put("subLook", v.joinToString(","))
+    /** what is seen while a channel changes: 0 the last picture, 1 black, 2 the last picture fades to black and the new one comes up out of it */
+    var changeLook: Int get() = (str("changeLook").toIntOrNull() ?: if (blackSwitch) 1 else 0).coerceIn(0, 2); set(v) = put("changeLook", v.toString())
     var blackSwitch: Boolean get() = flag("blackSwitch", false); set(v) = put("blackSwitch", v)
     /** how see-through the bars over the picture are, in per cent (0 - 50) */
     var glass: Int get() = p.getInt("glass", 10).coerceIn(0, 50); set(v) { p.edit().putInt("glass", v.coerceIn(0, 50)).apply() }
