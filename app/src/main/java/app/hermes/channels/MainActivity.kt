@@ -956,6 +956,7 @@ class MainActivity : Activity() {
         val p = player ?: return
         val l = lib ?: return
         val c = l.channels.getOrNull(i) ?: return
+        if (held) return
         if (!again) retries = 0
         current = i
         if (!preview) commit(i)
@@ -1026,6 +1027,9 @@ class MainActivity : Activity() {
         return if (Plus.PRESENT) all.filter { !Plus.hides(l.channels[it]) } else all
     }
 
+    /** something else plays (an extra): the app's own player waits */
+    private var held = false
+
     private val plusHost = object : PlusHost {
         override val activity get() = this@MainActivity
         override val ui get() = this@MainActivity.ui
@@ -1047,6 +1051,25 @@ class MainActivity : Activity() {
         override fun say(text: String) { this@MainActivity.say(text); if (text.isNotEmpty()) main.postDelayed({ if (note.text == text) this@MainActivity.say("") }, 3500) }
         override fun restyle() { resumeAt = page.place().takeIf { page.isOpen } ?: (-1 to -1); recreate() }
         override fun refocus() { if (page.isOpen) { page.refresh(); page.focus() } else if (guideBox.visibility == View.VISIBLE) guideList.requestFocus() else if (browsing) groupList.requestFocus() }
+        override fun hold(on: Boolean) {
+            held = on
+            if (on) {
+                if (page.isOpen) page.close()
+                if (browsing) closeBrowse(false)
+                hideGuide(); closeOptions()
+                main.removeCallbacks(hideInfo); infoBar.alpha = 0f
+                player?.stop()
+                this@MainActivity.say("")
+            }
+        }
+        override fun player(): ExoPlayer = ExoPlayer.Builder(this@MainActivity)
+            .setLoadControl(androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(10_000, 20_000, 800, 2_500).build()).build()
+        override fun source(address: String): MediaSource {
+            val item = MediaItem.fromUri(address)
+            return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
+                HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+            else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(patient).createMediaSource(item)
+        }
         override fun relist() {
             val l = lib ?: return
             scope = listed(scopeName).ifEmpty { scopeName = Library.ALL; listed(Library.ALL) }

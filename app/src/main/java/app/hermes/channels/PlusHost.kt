@@ -1,6 +1,7 @@
 package app.hermes.channels
 
 import android.os.Handler
+import android.view.KeyEvent
 import android.widget.FrameLayout
 import app.hermes.channels.core.Library
 
@@ -23,4 +24,10 @@ interface PlusHost {
     fun refocus()
     /** which channels are shown has changed */
     fun relist()
+    /** the app's own playing stops ([on]) for something else to play, or may go on again */
+    fun hold(on: Boolean)
+    /** a plain player of its own, for another picture; whoever asks for it lets it go */
+    fun player(): androidx.media3.exoplayer.ExoPlayer
+    /** what a player plays the stream at [address] from */
+    fun source(address: String): androidx.media3.exoplayer.source.MediaSource
 }
