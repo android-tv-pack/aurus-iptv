@@ -44,6 +44,14 @@ class FilmPlayActivity : Activity() {
     private var id = ""
     private var address = ""
     private var startAt = 0L
+    /** a film is a list of one; a series' episodes follow one another */
+    private var titles: Array<String> = emptyArray()
+    private var addresses: Array<String> = emptyArray()
+    private var ids: Array<String> = emptyArray()
+    private var index = 0
+    private var series = ""
+    private lateinit var heading: TextView
+    private lateinit var cues: CueView
     /** while Left or Right is held the film does not jump at every step: it goes there when the key is let go */
     private var aim = -1L
 
@@ -63,12 +71,21 @@ class FilmPlayActivity : Activity() {
         super.onCreate(b)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         ui = Ui(this); prefs = Prefs(this)
-        id = intent.getStringExtra("id").orEmpty()
-        address = intent.getStringExtra("address").orEmpty()
-        startAt = intent.getLongExtra("at", 0L)
+        titles = intent.getStringArrayExtra("titles") ?: emptyArray()
+        addresses = intent.getStringArrayExtra("addresses") ?: emptyArray()
+        ids = intent.getStringArrayExtra("ids") ?: emptyArray()
+        series = intent.getStringExtra("series").orEmpty()
+        index = intent.getIntExtra("index", 0).coerceIn(0, (addresses.size - 1).coerceAtLeast(0))
+        id = ids.getOrNull(index).orEmpty()
+        address = addresses.getOrNull(index).orEmpty()
+        // (an episode goes on from where it was left; a film from where its page said)
+        startAt = if (intent.hasExtra("at")) intent.getLongExtra("at", 0L) else prefs.filmAt(id)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         surface = SurfaceView(this)
         root.addView(surface, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        // subtitles, drawn as on the channels (and with the look chosen there)
+        cues = CueView(this).apply { look(prefs.subLook, false) }
+        root.addView(cues, FrameLayout.LayoutParams(-1, -1))
 
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -76,7 +93,8 @@ class FilmPlayActivity : Activity() {
             setPadding(ui.u(40), ui.u(60), ui.u(40), ui.u(26))
         }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
-        top.addView(ui.label(17f, Color.WHITE, true).apply { text = intent.getStringExtra("title").orEmpty() }, LinearLayout.LayoutParams(0, -2, 1f))
+        heading = ui.label(17f, Color.WHITE, true)
+        top.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
         state = ui.label(12f, ui.accent, true)
         top.addView(state, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ui.u(14) })
         times = ui.label(12.5f, ui.white(210))
@@ -84,7 +102,7 @@ class FilmPlayActivity : Activity() {
         bar.addView(top)
         line = Line(this, ui.accent)
         bar.addView(line, LinearLayout.LayoutParams(-1, ui.u(4)).apply { topMargin = ui.u(10) })
-        bar.addView(ui.label(10f, ui.white(120)).apply { text = "OK  pause      \u25C0 \u25B6  10 seconds      \u25B2 \u25BC  5 minutes      BACK  leave" }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(9) })
+        bar.addView(ui.label(10f, ui.white(120)).apply { text = "OK  pause      \u25C0 \u25B6  10 seconds      \u25B2 \u25BC  5 minutes      MENU  sound, subtitles      BACK  leave" }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(9) })
         root.addView(bar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
         note = ui.label(14f, Color.WHITE, lines = 3).apply { gravity = Gravity.CENTER }
@@ -109,13 +127,19 @@ class FilmPlayActivity : Activity() {
                 surface.layoutParams = FrameLayout.LayoutParams(w, h, Gravity.CENTER)
             }
             override fun onPlaybackStateChanged(st: Int) {
-                if (st == Player.STATE_ENDED) { prefs.setFilmAt(id, 0L); ended = true; finish() }
+                if (st == Player.STATE_ENDED) {
+                    prefs.setFilmAt(id, 0L)
+                    // the next episode follows by itself
+                    if (index + 1 < addresses.size) { index++; load(0L); return }
+                    ended = true; finish()
+                }
                 if (st == Player.STATE_READY) note.text = ""
                 if (st == Player.STATE_BUFFERING && note.text.isEmpty()) main.postDelayed(waiting, 1500)
                 if (st != Player.STATE_BUFFERING) main.removeCallbacks(waiting)
                 tick.run()
             }
             override fun onIsPlayingChanged(on: Boolean) { tick.run() }
+            override fun onCues(c: androidx.media3.common.text.CueGroup) { cues.show(c.cues) }
             override fun onPlayerError(e: PlaybackException) {
                 Log.w(tag, "film: ${e.errorCodeName}")
                 // one more try from where it was, then it is said
@@ -124,13 +148,45 @@ class FilmPlayActivity : Activity() {
                 show(true)
             }
         })
+        load(if (leftAt > 0L) leftAt else startAt)
+    }
+
+    /** the film, or the episode that is on, from [at] */
+    private fun load(at: Long) {
+        val p = player ?: return
+        id = ids.getOrNull(index).orEmpty(); address = addresses.getOrNull(index).orEmpty()
+        heading.text = (if (series.isNotEmpty()) "$series  \u00B7  " else "") + titles.getOrNull(index).orEmpty()
+        retried = false; aim = -1L
         p.setMediaItem(MediaItem.fromUri(address))
-        val at = if (leftAt > 0L) leftAt else startAt
         if (at > 0L) p.seekTo(at)
         p.prepare()
         p.playWhenReady = true
-        Log.i(tag, "film: play" + (if (at > 0L) " from ${at / 1000} s" else ""))
+        Log.i(tag, "film: play" + (if (addresses.size > 1) " ${index + 1} of ${addresses.size}" else "") + (if (at > 0L) " from ${at / 1000} s" else ""))
         show(false)
+    }
+
+    /** the sounds and the subtitles the film has, to choose from */
+    private fun choices() {
+        val p = player ?: return
+        fun of(type: Int) = p.currentTracks.groups.filter { it.type == type }.flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it } }
+        fun nameOf(g: androidx.media3.common.Tracks.Group, i: Int): String {
+            val f = g.getTrackFormat(i)
+            val lang = f.language?.takeIf { it != "und" }?.let { java.util.Locale.forLanguageTag(it).displayLanguage.replaceFirstChar { c -> c.uppercase() } }.orEmpty()
+            return listOf(lang, f.label.orEmpty()).filter { it.isNotBlank() }.distinct().joinToString("  \u00B7  ").ifEmpty { "Track ${i + 1}" }
+        }
+        val sounds = of(C.TRACK_TYPE_AUDIO); val texts = of(C.TRACK_TYPE_TEXT)
+        val sh = Sheet(ui, "Sound and subtitles", if (sounds.size < 2 && texts.isEmpty()) "This film has one sound and no subtitles." else null)
+        if (sounds.size > 1) for ((g, i) in sounds) sh.item("Sound:  " + nameOf(g, i), { if (g.isTrackSelected(i)) "\u2713" else "" }) {
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, i)).build()
+        }
+        if (texts.isNotEmpty()) {
+            val off = p.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT) || texts.none { (g, i) -> g.isTrackSelected(i) }
+            sh.item("Subtitles:  Off", { if (off) "\u2713" else "" }) { p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build() }
+            for ((g, i) in texts) sh.item("Subtitles:  " + nameOf(g, i), { if (!off && g.isTrackSelected(i)) "\u2713" else "" }) {
+                p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, i)).build()
+            }
+        }
+        sh.button("Close", primary = true).show { }
     }
     private var retried = false
     private var ended = false
@@ -203,6 +259,9 @@ class FilmPlayActivity : Activity() {
             // (held, the steps grow: 10 s, then 30 s, then a minute)
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { move(step(event)); return true }
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> { move(-step(event)); return true }
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_CAPTIONS, KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK -> { choices(); return true }
+            KeyEvent.KEYCODE_MEDIA_NEXT -> { if (index + 1 < addresses.size) { prefs.setFilmAt(id, 0L); index++; load(prefs.filmAt(ids[index])) }; return true }
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { if (index > 0) { index--; load(0L) }; return true }
             KeyEvent.KEYCODE_DPAD_UP -> { move(300_000); return true }
             KeyEvent.KEYCODE_DPAD_DOWN -> { move(-300_000); return true }
         }

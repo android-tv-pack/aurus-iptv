@@ -19,6 +19,26 @@ object Images {
     }
     private val missing = HashSet<String>()
 
+    /** the picture at [url], from memory or fetched ([done] on the main thread; null when there is none) */
+    fun get(url: String, px: Int, done: (Bitmap?) -> Unit) {
+        val have = if (url.isEmpty()) null else cache.get(url)
+        if (have != null || url.isEmpty() || synchronized(missing) { url in missing }) { done(have); return }
+        pool.execute {
+            val b = cache.get(url) ?: try {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 6000; c.readTimeout = 8000
+                val bytes = c.inputStream.use { it.readBytes() }
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+                var s = 1
+                while (o.outWidth / (s * 2) >= px && o.outHeight / (s * 2) >= px) s *= 2
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = s })
+            } catch (_: Exception) { null }
+            if (b == null) synchronized(missing) { missing.add(url) } else cache.put(url, b)
+            main.post { done(b) }
+        }
+    }
+
     /** shows the picture at [url] in [v] (nothing when there is none); [v] may be given another picture meanwhile */
     fun show(url: String, v: ImageView, px: Int) {
         v.tag = url

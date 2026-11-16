@@ -89,6 +89,10 @@ class Prefs(ctx: Context) {
         val rest = lines("filmsAt").filter { !it.startsWith("$id\t") }
         put("filmsAt", ((if (ms > 0L) listOf("$id\t$ms") else emptyList()) + rest).take(300).joinToString("\n"))
     }
+    /** the films and series that were begun, the latest first (each a line, see Films.keep) */
+    val filmsBegun: List<String> get() = lines("filmsBegun")
+    fun noteFilmBegun(id: String, line: String) { put("filmsBegun", (listOf(line) + lines("filmsBegun").filter { !it.contains("\"id\":\"$id\"") }).take(40).joinToString("\n")) }
+    fun dropFilmBegun(id: String) { put("filmsBegun", lines("filmsBegun").filter { !it.contains("\"id\":\"$id\"") }.joinToString("\n")) }
     /** the height films are asked for: "" = the stream chooses as the connection allows */
     var filmHeight: String get() = str("filmHeight"); set(v) = put("filmHeight", v)
 

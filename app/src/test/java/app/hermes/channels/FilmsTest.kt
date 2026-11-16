@@ -72,4 +72,24 @@ class FilmsTest {
         val req = Json.obj(Json.parse("""{"cmd":"flicks","fid":1,"offset":0,"limit":0}"""))
         assertEquals("""{"key":"k","cmd":"flicks","fid":1,"offset":60,"limit":30}""", Films.body("k", req, 60, 30))
     }
+
+    @Test fun waysToNarrowDownAreReadAndPutTogether() {
+        val r = Films.reply("""{"type":"videoportal","items":[],"controls":{"filters":[
+            {"type":"enum","title":"Year","items":[{"title":"2021-2026","request":{"filter":"on","years":"2021-2026"}},{"title":"1950","request":{"filter":"on","years":"1950"}}]},
+            {"type":"enum","title":"Kind","items":[{"title":"western","request":{"filter":"on","genre":3}}]}]}}""")
+        assertEquals(2, r.filters.size)
+        assertEquals("Year", r.filters[0].title); assertEquals("1950", r.filters[0].choices[1].first)
+        val q = Films.narrowed(listOf(r.filters[0].choices[1].second, r.filters[1].choices[0].second))
+        assertEquals("""{"key":"k","filter":"on","years":"1950","genre":3,"offset":0,"limit":60}""", Films.body("k", q, 0, 60))
+    }
+
+    @Test fun anEntryIsKeptAsALineAndReadBack() {
+        val e = Films.reply("""{"type":"category","items":[{"type":"multistream","title":"Two \"B\"","img":"http://x/h.jpg","imglr":"http://x/l.jpg","request":{"cmd":"flick","fid":9},"fid":9,"year":2012}]}""").entry!!.parts[0]
+        val line = Films.keep(e)
+        assertTrue('\n' !in line)
+        val b = Films.kept(line)!!
+        assertEquals(Films.Kind.SERIES, b.kind); assertEquals("Two \"B\"", b.title); assertEquals("9", b.id); assertEquals("http://x/l.jpg", b.small); assertEquals(2012, b.year)
+        assertEquals("""{"key":"k","cmd":"flick","fid":9}""", Films.body("k", b.request))
+        assertNull(Films.kept("rubbish")); assertNull(Films.kept("{}"))
+    }
 }

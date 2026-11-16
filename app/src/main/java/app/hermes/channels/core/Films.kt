@@ -11,7 +11,10 @@ package app.hermes.channels.core
  *  - a film (`stream`): `url`, and `variants` by height;
  *  - a series (`multistream`): `items`, its episodes, each a film;
  *  - `error`, with a `description`.
- * The first answer may also name the request to search with (`controls.search.request`, the words in place of {USERINPUT}).
+ * The first answer may also name the request to search with (`controls.search.request`, the words in place of {USERINPUT})
+ * and ways to narrow the whole library down (`controls.filters`: each a `title` and `items`, each of those a `title` and
+ * a `request`). One choice of each way may be put together into one question, which is asked by itself (not together with
+ * a shelf's) and may be asked for in pieces like a shelf.
  */
 object Films {
 
@@ -51,7 +54,10 @@ object Films {
         }
     }
 
-    class Reply(val entry: Entry?, val count: Int, val search: Map<String, Any?>?, val error: String)
+    /** a way to narrow the library down (by year, by kind of film ...): its name and its choices, each with what to ask */
+    class Filter(val title: String, val choices: List<Pair<String, Map<String, Any?>>>)
+
+    class Reply(val entry: Entry?, val count: Int, val search: Map<String, Any?>?, val error: String, val filters: List<Filter> = emptyList())
 
     /** what an answer says; never throws: a text that is no answer gives an error */
     fun reply(text: String): Reply {
@@ -59,7 +65,12 @@ object Films {
         if (o.isEmpty()) return Reply(null, 0, null, "The library's answer could not be read")
         if (Json.str(o["type"]) == "error") return Reply(null, 0, null, Json.str(o["description"]).ifEmpty { "The library refused" })
         val search = Json.obj(Json.obj(Json.obj(o["controls"])["search"])["request"]).takeIf { it.isNotEmpty() }
-        return Reply(entry(o), num(o["count"]), search, "")
+        val filters = Json.list(Json.obj(o["controls"])["filters"]).mapNotNull { f ->
+            val m = Json.obj(f)
+            val choices = Json.list(m["items"]).mapNotNull { c -> Json.obj(c).let { x -> Json.obj(x["request"]).takeIf { it.isNotEmpty() }?.let { Json.str(x["title"]).trim() to it } } }
+            if (choices.isEmpty()) null else Filter(Json.str(m["title"]).trim(), choices)
+        }
+        return Reply(entry(o), num(o["count"]), search, "", filters)
     }
 
     private fun num(v: Any?): Int = (v as? Double)?.toInt() ?: Json.str(v).toIntOrNull() ?: 0
@@ -85,6 +96,18 @@ object Films {
         if (offset >= 0) m["offset"] = offset
         if (limit >= 0) m["limit"] = limit
         return write(m)
+    }
+
+    /** several choices (one of each way to narrow down) as one question */
+    fun narrowed(choices: List<Map<String, Any?>>): Map<String, Any?> = LinkedHashMap<String, Any?>().also { m -> for (c in choices) m.putAll(c) }
+
+    /** an entry as one line of text to keep, and back ([kept] gives null for a line that is not one) */
+    fun keep(e: Entry): String = write(mapOf("kind" to e.kind.name, "title" to e.title, "id" to e.id, "img" to e.poster, "imglr" to e.small, "year" to e.year, "request" to e.request))
+    fun kept(line: String): Entry? {
+        val o = try { Json.obj(Json.parse(line)) } catch (_: Exception) { return null }
+        val kind = Kind.values().firstOrNull { it.name == Json.str(o["kind"]) } ?: return null
+        val id = Json.str(o["id"]); if (id.isEmpty()) return null
+        return Entry(kind, Json.str(o["title"]), id, Json.str(o["img"]), Json.str(o["imglr"]), num(o["year"]), 0, "", 0, false, false, false, Json.obj(o["request"]), "", emptyList(), emptyList())
     }
 
     /** the search request with the words put in */
