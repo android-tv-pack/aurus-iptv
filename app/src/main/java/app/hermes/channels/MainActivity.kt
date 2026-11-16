@@ -140,6 +140,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         ui = Ui(this)
         prefs = Prefs(this)
+        compact = Plus.compact(prefs)
         if (Repo.source != prefs.source) Repo.switchTo(prefs.source)
         prefs.migrateEpg()
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -162,6 +163,20 @@ class MainActivity : Activity() {
         root.addView(shade, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         cues = CueView(this)
         root.addView(cues, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
+        buildOverlays()
+        setContentView(root)
+        Plus.start(plusHost)
+        resumeAt?.let { resumeAt = null; if (it.first >= 0) { page.resume(it); main.post { if (!page.isOpen) openSettings() } } }
+        takeDropped()
+        favs = prefs.favs.toMutableSet()
+        recents = prefs.recents
+        scopeName = prefs.scope.ifEmpty { Library.ALL }
+        read(intent)
+    }
+
+    /** everything that lies over the picture: built when the app starts, and once more when its look changes */
+    private fun buildOverlays() {
+        chips.clear()
         cornerClock = ui.label(15f, white(225)).apply { setShadowLayer(u(4).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
         root.addView(cornerClock, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(18), u(30), 0) })
         buildInfo()
@@ -172,15 +187,21 @@ class MainActivity : Activity() {
         root.addView(note, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         digits = ui.label(40f, Color.WHITE, true).apply { setShadowLayer(u(6).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
         root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
-        setContentView(root)
         page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME.removeSuffix("-beta") + (if (isBeta) "  \u00B7  BETA" else ""))
-        Plus.start(plusHost)
-        resumeAt?.let { resumeAt = null; if (it.first >= 0) { page.resume(it); main.post { if (!page.isOpen) openSettings() } } }
-        takeDropped()
-        favs = prefs.favs.toMutableSet()
-        recents = prefs.recents
-        scopeName = prefs.scope.ifEmpty { Library.ALL }
-        read(intent)
+    }
+
+    /** the app's look has changed (an extra): what lies over the picture is built anew, while the picture goes on */
+    private fun restyle() {
+        val at = if (page.isOpen) page.place() else null
+        if (browsing) closeBrowse(true)
+        hideGuide(); closeOptions()
+        main.removeCallbacks(hideInfo)
+        for (i in root.childCount - 1 downTo 0) root.getChildAt(i).let { if (it !== backdrop && it !== surface && it !== shade && it !== cues) root.removeViewAt(i) }
+        ui = Ui(this)
+        compact = Plus.compact(prefs)
+        buildOverlays()
+        clockTick.run()
+        if (at != null) { page.resume(at); openSettingsNow() }
     }
 
     /** dropped into the app's files folder: `playlist.txt` (line 1 the playlist link, line 2 an optional list with logos), `guide.txt` (the guide's link) */
@@ -1027,6 +1048,8 @@ class MainActivity : Activity() {
         // the decoder of the channel before is let go, not handed on: handed on, the box's decoder stumbled over a channel
         // of another picture size, which cost half a second and a second start
         p.stop()
+        // (the sound comes in over a moment, not at once: at once it can click)
+        fader?.cancel(); p.volume = 0f; faded = false
         p.setMediaSource(src)
         p.prepare()
         p.playWhenReady = true
@@ -1038,6 +1061,21 @@ class MainActivity : Activity() {
         val all = l.list(id, favs, recents)
         return if (Plus.PRESENT) all.filter { !Plus.hides(l.channels[it]) } else all
     }
+
+    // ---- the sound comes and goes over a moment (leaving the app, coming back, a new channel): cut off at once it can click
+    private var fader: android.animation.ValueAnimator? = null
+    private var faded = true
+    private fun fadeTo(v: Float, ms: Long) {
+        fader?.cancel()
+        val p = player ?: return
+        fader = android.animation.ValueAnimator.ofFloat(p.volume, v).apply {
+            duration = ms
+            addUpdateListener { player?.volume = it.animatedValue as Float }
+            start()
+        }
+    }
+    override fun onPause() { super.onPause(); fadeTo(0f, 90) }
+    override fun onResume() { super.onResume(); if (faded) fadeTo(1f, 220) }
 
     /** the channel that is on is played by another engine (an extra) */
     private var other = false
@@ -1063,7 +1101,7 @@ class MainActivity : Activity() {
             play(i)
         }
         override fun say(text: String) { this@MainActivity.say(text); if (text.isNotEmpty()) main.postDelayed({ if (note.text == text) this@MainActivity.say("") }, 3500) }
-        override fun restyle() { resumeAt = page.place().takeIf { page.isOpen } ?: (-1 to -1); recreate() }
+        override fun restyle() = this@MainActivity.restyle()
         override fun refocus() { if (page.isOpen) { page.refresh(); page.focus() } else if (guideBox.visibility == View.VISIBLE) guideList.requestFocus() else if (browsing) groupList.requestFocus() }
         override fun replay() { if (current >= 0) play(current, true) }
         override fun picture() { shade.visibility = View.GONE; firstPicture = true; this@MainActivity.say("") }
@@ -1109,6 +1147,7 @@ class MainActivity : Activity() {
             val name = when (state) { Player.STATE_BUFFERING -> "buffering"; Player.STATE_READY -> "ready"; Player.STATE_ENDED -> "ended"; else -> "idle" }
             Log.i(tag, "#${current + 1} $name after ${SystemClock.elapsedRealtime() - startedAt} ms")
             if (state == Player.STATE_BUFFERING && firstPicture && slowPieces >= 2) saySlow()
+            if (state == Player.STATE_READY && !faded) { faded = true; fadeTo(1f, 220) }
         }
         override fun onRenderedFirstFrame() {
             shade.visibility = View.GONE
@@ -1733,7 +1772,7 @@ class MainActivity : Activity() {
     }
 
     /** one line a channel in the list (an extra) */
-    private val compact by lazy { Plus.compact(prefs) }
+    private var compact = false
     private class ChanRow(val num: TextView, val logo: ImageView, val name: TextView, val now: TextView, val bar: View, val star: TextView)
 
     private val chanAdapter = object : BaseAdapter() {
