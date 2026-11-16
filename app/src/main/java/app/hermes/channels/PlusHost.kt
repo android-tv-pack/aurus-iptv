@@ -24,6 +24,10 @@ interface PlusHost {
     fun refocus()
     /** which channels are shown has changed */
     fun relist()
+    /** plays the channel that is on once more (the way it is played has changed) */
+    fun replay()
+    /** another engine shows its first picture */
+    fun picture()
     /** the app's own playing stops ([on]) for something else to play, or may go on again */
     fun hold(on: Boolean)
     /** a plain player of its own, for another picture; whoever asks for it lets it go */

@@ -38,6 +38,16 @@ object Plus {
     /** the settings are asked for; true = [then] is called when they may open */
     fun settingsAsked(then: () -> Unit): Boolean = false
 
+    /** the channel [key] is played by another engine than the app's own */
+    fun takes(key: String): Boolean = false
+    /** plays the stream at [address] on [surface] with the other engine */
+    fun play(address: String, surface: android.view.SurfaceView) {}
+    /** the other engine stops and lets the surface go */
+    fun letGo() {}
+    /** the choice of engine among the channel's options; null = there is none */
+    fun engineChip(key: String): String? = null
+    fun engineStep(key: String) {}
+
     /** OK on a programme of channel [key] that has not begun; true = something changed for it */
     fun programme(key: String, channel: String, p: Guide.Prog): Boolean = false
     /** what stands before the title of a programme; "" = nothing */

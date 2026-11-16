@@ -240,6 +240,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         Plus.stop(resumeAt != null)
+        other = false
         main.removeCallbacksAndMessages(null)
         sleepMin = 0; sleepAt = 0L; sleepWarned = false
         shade.visibility = View.GONE
@@ -1005,7 +1006,18 @@ class MainActivity : Activity() {
         if (prefs.blackSwitch) shade.visibility = View.VISIBLE
         val nowSec = System.currentTimeMillis() / 1000
         // (an address in a form there is no reader for must not take the app down: the channel is said not to play)
-        val src = try { source(if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url) } catch (e: Exception) {
+        val address = if (from > 0L && rule != null) Catchup.address(c.url, rule, from / 1000, nowSec, (nowSec - from / 1000).coerceIn(60, 4 * 3600)) else c.url
+        // (an extra) a channel that is played by another engine: the app's own player lets the surface go and waits
+        if (playKey.isNotEmpty() && Plus.takes(playKey)) {
+            main.removeCallbacks(probe); main.removeCallbacks(tunnelCheck); main.removeCallbacks(settle)
+            p.stop()
+            if (!other) { other = true; p.clearVideoSurface() }
+            shade.visibility = View.VISIBLE
+            Plus.play(address, surface)
+            return
+        }
+        if (other) { other = false; Plus.letGo(); p.setVideoSurfaceView(surface) }
+        val src = try { source(address) } catch (e: Exception) {
             Log.w(tag, "#${i + 1} no reader for this kind of address (${e.cause?.javaClass?.simpleName ?: e.javaClass.simpleName})")
             p.stop()
             shade.visibility = View.VISIBLE
@@ -1027,6 +1039,8 @@ class MainActivity : Activity() {
         return if (Plus.PRESENT) all.filter { !Plus.hides(l.channels[it]) } else all
     }
 
+    /** the channel that is on is played by another engine (an extra) */
+    private var other = false
     /** something else plays (an extra): the app's own player waits */
     private var held = false
 
@@ -1051,9 +1065,12 @@ class MainActivity : Activity() {
         override fun say(text: String) { this@MainActivity.say(text); if (text.isNotEmpty()) main.postDelayed({ if (note.text == text) this@MainActivity.say("") }, 3500) }
         override fun restyle() { resumeAt = page.place().takeIf { page.isOpen } ?: (-1 to -1); recreate() }
         override fun refocus() { if (page.isOpen) { page.refresh(); page.focus() } else if (guideBox.visibility == View.VISIBLE) guideList.requestFocus() else if (browsing) groupList.requestFocus() }
+        override fun replay() { if (current >= 0) play(current, true) }
+        override fun picture() { shade.visibility = View.GONE; firstPicture = true; this@MainActivity.say("") }
         override fun hold(on: Boolean) {
             held = on
             if (on) {
+                if (other) { other = false; Plus.letGo(); player?.setVideoSurfaceView(surface) }
                 if (page.isOpen) page.close()
                 if (browsing) closeBrowse(false)
                 hideGuide(); closeOptions()
@@ -1269,7 +1286,7 @@ class MainActivity : Activity() {
         infoHint = ui.label(10f, white(105)).apply { text = "Hold OK   sound, subtitles, picture size" }
         col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
         chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
-        for (i in 0..6) {
+        for (i in 0..7) {
             val t = ui.label(11.5f, Color.WHITE, true).apply {
                 isFocusable = true
                 isClickable = true
@@ -1510,6 +1527,7 @@ class MainActivity : Activity() {
         }
         4 -> "Picture   " + PICTURE[pictureMode]
         5 -> "Lip sync   " + (if (prefs.soundDelay == 0) "0" else (if (prefs.soundDelay > 0) "sound +" else "sound \u2212") + kotlin.math.abs(prefs.soundDelay) + " ms") + "   \u25B2\u25BC"
+        7 -> Plus.engineChip(playKey).orEmpty()
         else -> "Sleep   " + if (sleepAt == 0L) "off" else "${((sleepAt - SystemClock.elapsedRealtime() + 59_999) / 60_000).coerceAtLeast(1)} min"
     }
 
@@ -1521,6 +1539,7 @@ class MainActivity : Activity() {
         chips[1].visibility = if (rec && (shiftAt > 0L || paused || Repo.nowNext(current, System.currentTimeMillis()).first != null)) View.VISIBLE else View.GONE
         // (with the hardware keeping step there is nothing to set)
         chips[5].visibility = if (tunnel) View.GONE else View.VISIBLE
+        chips[7].visibility = if (Plus.engineChip(playKey) != null) View.VISIBLE else View.GONE
     }
 
     /** OK on a choice goes to its next value */
@@ -1570,6 +1589,7 @@ class MainActivity : Activity() {
                 lib?.let { if (testStream == null && current >= 0) prefs.setPicture(it.keyOf(current), pictureMode) }
                 placeSurface()
             }
+            7 -> { Plus.engineStep(playKey); closeOptions(); play(current, true) }
             else -> setSleep(when (sleepMin) { 0 -> 30; 30 -> 60; 60 -> 90; else -> 0 })
         }
     }

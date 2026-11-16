@@ -15,6 +15,7 @@ android {
         targetSdk = 34
         versionCode = 27
         versionName = "0.27-beta"
+        if (plus) ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
     buildTypes {
         release {
@@ -32,6 +33,8 @@ android {
 }
 
 dependencies {
+    // (Aurus Plus only) the second engine, for channels the app's own does not play
+    if (plus) implementation("org.videolan.android:libvlc-all:3.7.7")
     implementation("androidx.media3:media3-exoplayer:1.11.0-beta01")
     implementation("androidx.media3:media3-exoplayer-hls:1.11.0-beta01")
     // channels that are sent as DASH (.mpd), Smooth Streaming or RTSP: without these the player has no reader for them
