@@ -1780,9 +1780,11 @@ class MainActivity : Activity() {
             1 -> { closeOptions(); if (shiftAt > 0L || paused) play(current) else startOver() }
             2 -> {
                 val all = tracks(C.TRACK_TYPE_AUDIO)
-                if (all.size < 2 && sounds.size > 1 && playKey.isNotEmpty()) {
+                if (sounds.size > 1 && playKey.isNotEmpty()) {
                     // the next of the sounds inside the picture stream: the channel is read again for that one, and its
                     // language is the one looked for on other channels from now on
+                    // (also where the player offers these sounds as tracks of its own: changing between those in the
+                    // middle of a piece left the picture standing still)
                     val next = ((if (pick < 0) 0 else pick) + 1) % sounds.size
                     soundPick[playKey] = next
                     langOf(sounds[next].lang).let { if (it.isNotEmpty()) prefs.audioLang = it }
@@ -1796,6 +1798,14 @@ class MainActivity : Activity() {
                 val lang = next.format.language.orEmpty()
                 if (testStream == null) prefs.audioLang = lang
                 sel.setParameters(sel.buildUponParameters().setOverrideForType(TrackSelectionOverride(next.group.mediaTrackGroup, next.index)).setPreferredAudioLanguage(lang.ifEmpty { null }))
+                // a live channel whose sounds come in pieces of their own: the new sound's pieces are for another moment
+                // than the picture's that are already fetched, and the player waited for ever (fetching both anew from
+                // where it was did not always help either); the channel is started again, which takes a second or two
+                if (shiftAt == 0L && !paused && player?.isCurrentMediaItemLive == true) {
+                    Log.i(tag, "#${current + 1} sound changed to ${lang.ifEmpty { "?" }}: the channel starts again with it")
+                    play(current, true, browsing)
+                    refreshChips()
+                }
             }
             3 -> {
                 val all = tracks(C.TRACK_TYPE_TEXT)
