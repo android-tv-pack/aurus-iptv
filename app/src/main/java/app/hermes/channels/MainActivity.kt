@@ -167,6 +167,7 @@ class MainActivity : Activity() {
         root.addView(cues, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         buildOverlays()
         setContentView(root)
+        (getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager).registerDisplayListener(screenWatch, main)
         Plus.start(plusHost)
         resumeAt?.let { resumeAt = null; if (it.first >= 0) { page.resume(it); main.post { if (!page.isOpen) openSettings() } } }
         takeDropped()
@@ -262,6 +263,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        screenHeld = false
         Plus.stop(resumeAt != null)
         other = false
         main.removeCallbacksAndMessages(null)
@@ -706,6 +708,7 @@ class MainActivity : Activity() {
                         if (frameGen != g) { frameGen = g; frameN = 0 }
                         if (frameN < frameTimes.size) {
                             frameTimes[frameN++] = t
+                            if (frameN == 36) { val e = Rate.of(frameTimes.copyOfRange(12, 36)); main.post { if (g == playGen) early(e) } }
                             if (frameN == frameTimes.size) {
                                 val fps = Rate.of(frameTimes.copyOfRange(20, frameTimes.size))
                                 if (Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "rated from steps (0.1 ms): " + (21 until frameTimes.size).joinToString(" ") { ((frameTimes[it] - frameTimes[it - 1]) / 100).toString() } + "; own=$own waiting=${waiting.size}")
@@ -936,7 +939,23 @@ class MainActivity : Activity() {
 
     /** the channel has been on for a few seconds: the viewer stays with it */
     private var settled = false
-    private val settle = Runnable { settled = true; if (!browsing) matchScreen() }
+    private val settle = Runnable {
+        settled = true
+        // (a rate remembered from the last time, not measured this time: see [early])
+        if (!browsing && (rated || channelFps <= 0f)) matchScreen()
+    }
+
+    /**
+     * The rate of the channel's first pictures. A channel whose rate is remembered from the last time may send another
+     * now (some change between programmes), and going by the old one made the screen change twice. So the first
+     * pictures are asked: when they agree with what is remembered the screen is set at once, a second or two into the
+     * channel; else it waits for the measuring to end.
+     */
+    private fun early(fps: Float) {
+        if (rated || browsing || channelFps <= 0f || !prefs.matchRate) return
+        if (fps > 0f && kotlin.math.abs(fps - channelFps) <= 1.5f) { settled = true; main.removeCallbacks(settle); matchScreen() }
+        else Log.i(tag, "#${current + 1} the rate from before (${"%.2f".format(Locale.US, channelFps)}) is not what the first pictures say: the screen waits for the measuring")
+    }
     private fun rateKnown() { if (settled || !prefs.rateWait) matchScreen() }
 
     /** switches the screen to the rate of the channel that plays (same resolution), so that motion is even */
@@ -954,7 +973,40 @@ class MainActivity : Activity() {
             want = modes[i].modeId
             if (want != cur.modeId) Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, modes[i].refreshRate)} a second")
         }
-        if (lp.preferredDisplayModeId != want) { lp.preferredDisplayModeId = want; window.attributes = lp }
+        if (lp.preferredDisplayModeId != want) {
+            @Suppress("DEPRECATION") if (want != 0 && want != windowManager.defaultDisplay.mode.modeId) holdForScreen()
+            lp.preferredDisplayModeId = want; window.attributes = lp
+        }
+    }
+
+    // ---- while the screen changes its rate it is dark, and for some seconds after it the picture did not move while the
+    // sound ran on: the channel waits for the screen, and plays on when it is there (for a live channel: a moment later
+    // than before, with nothing missed)
+    private var screenHeld = false
+    private val screenFree = Runnable {
+        if (!screenHeld) return@Runnable
+        screenHeld = false
+        Log.i(tag, "screen: changed, playing on")
+        if (!paused && !held && !other) player?.play()
+    }
+    private fun holdForScreen() {
+        val p = player ?: return
+        if (other || held || paused) return
+        screenHeld = true
+        p.pause()
+        main.removeCallbacks(screenFree); main.postDelayed(screenFree, 4500)
+    }
+    override fun onDestroy() {
+        (getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager).unregisterDisplayListener(screenWatch)
+        super.onDestroy()
+    }
+    private val screenWatch = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) {}
+        override fun onDisplayRemoved(id: Int) {}
+        override fun onDisplayChanged(id: Int) {
+            @Suppress("DEPRECATION") val now = windowManager.defaultDisplay.mode.modeId
+            if (screenHeld && now == window.attributes.preferredDisplayModeId) { main.removeCallbacks(screenFree); main.postDelayed(screenFree, 500) }
+        }
     }
 
     private fun screenLine(): String {
@@ -1068,6 +1120,7 @@ class MainActivity : Activity() {
             p.stop()
             // (the sound comes in over a moment, not at once: at once it can click)
             fader?.cancel(); p.volume = 0f; faded = false
+        screenHeld = false; main.removeCallbacks(screenFree)
             p.setMediaSource(src)
             p.prepare()
             p.playWhenReady = true
