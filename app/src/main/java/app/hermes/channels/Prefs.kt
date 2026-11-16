@@ -8,6 +8,10 @@ class Prefs(ctx: Context) {
 
     private fun str(k: String) = p.getString(k, "") ?: ""
     private fun put(k: String, v: String) = p.edit().putString(k, v).apply()
+    /** what the extras ([Plus]) keep: under names of their own, apart from the app's */
+    fun plusGet(k: String): String = str("plus.$k")
+    fun plusPut(k: String, v: String) = put("plus.$k", v)
+
     private fun lines(k: String) = str(k).split('\n').filter { it.isNotEmpty() }
 
     // ---- the playlists. Each has a number; what belongs to one playlist (its links, favourites, recent channels ...) is kept

@@ -11,7 +11,7 @@ import android.widget.TextView
 /** The look shared by every screen of the app: sizes relative to a 540-unit-high screen, colours, text. */
 class Ui(val a: Activity) {
     private val unit = a.resources.displayMetrics.heightPixels / 540f
-    val accent = Color.rgb(0, 229, 255)
+    val accent = Plus.accent(Prefs(a)).let { if (it != 0) it else Color.rgb(0, 229, 255) }
     val ink = Color.rgb(8, 11, 22)
 
     fun u(n: Float): Int = (n * unit).toInt()

@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val plus = (findProperty("plus") as String?) == "true" && file("../../aurus-plus/src").exists()
+
 android {
     namespace = "app.hermes.channels"
     compileSdk = 36
@@ -21,6 +23,9 @@ android {
         }
     }
     buildFeatures { buildConfig = true }
+    // Aurus Plus, the extras that are not part of the open app, are kept in a folder of their own beside this one.
+    // Built with -Pplus=true and that folder present, their file stands in place of the empty one in src/free.
+    sourceSets["main"].java.srcDir(if (plus) "../../aurus-plus/src" else "src/free/java")
     dependenciesInfo { includeInApk = false; includeInBundle = false }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

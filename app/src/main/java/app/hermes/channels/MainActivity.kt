@@ -174,6 +174,7 @@ class MainActivity : Activity() {
         root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
         setContentView(root)
         page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME.removeSuffix("-beta") + (if (isBeta) "  \u00B7  BETA" else ""))
+        resumeAt?.let { resumeAt = null; page.resume(it); main.post { if (!page.isOpen) openSettings() } }
         takeDropped()
         favs = prefs.favs.toMutableSet()
         recents = prefs.recents
@@ -2438,7 +2439,10 @@ class MainActivity : Activity() {
                 }
             ))
         )
-        page.open(tabs)
+        // (the extras' tab, where a build has them, stands before About)
+        // (a change of the app's colour draws the whole app anew: the settings then open again where they stood)
+        val extra = Plus.tab(this, ui, prefs, { resumeAt = page.place(); recreate() }, { if (page.isOpen) page.focus() })
+        page.open(if (extra != null) tabs.dropLast(1) + extra + tabs.last() else tabs)
     }
 
     // ---------------------------------------------------------------- keys
@@ -2533,6 +2537,8 @@ class MainActivity : Activity() {
     }
 
     private companion object {
+        /** the place in the settings to open again after the app was drawn anew */
+        var resumeAt: Pair<Int, Int>? = null
         /** how long a channel is on before the screen's rate is changed for it */
         const val SETTLE_MS = 5000L
         /** how far a picture's time may come out of the decoder from the time that went in and still be taken for the same picture */

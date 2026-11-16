@@ -33,6 +33,9 @@ class Page(private val ui: Ui, private val host: FrameLayout, private val title:
     private var lastRow = 0
     /** set before [open]: the focus goes to the row it was on when the page was closed */
     var keepRow = false
+    /** where the page stands (tab, row), and standing there again when it is opened next: for an app that is drawn anew */
+    fun place() = last to lastRow
+    fun resume(at: Pair<Int, Int>) { last = at.first; lastRow = at.second; keepRow = true }
     val isOpen: Boolean get() = view != null
 
     fun refresh() { refreshAll?.invoke() }
