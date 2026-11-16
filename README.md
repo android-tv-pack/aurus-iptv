@@ -21,7 +21,7 @@ The pictures show a demonstration playlist of open films (Big Buck Bunny and Tea
 ## Install
 
 1. Download **Aurus-IPTV-beta.apk** from the newest entry on the [releases page](https://github.com/android-tv-pack/aurus-iptv/releases).
-   Direct link, for the *Downloader* app on the TV: `https://github.com/android-tv-pack/aurus-iptv/releases/download/v0.30-beta/Aurus-IPTV-beta.apk` (the link names the version, so it changes with each beta)
+   Direct link, for the *Downloader* app on the TV: `https://github.com/android-tv-pack/aurus-iptv/releases/download/v0.31-beta/Aurus-IPTV-beta.apk` (the link names the version, so it changes with each beta)
    Once installed, the app updates itself: Settings (MENU) > About > *Aurus IPTV update*.
 2. Put it on the TV and open it: with a file manager app, with the *Downloader* app, or from a USB stick. Android asks once to allow installs from that app.
 3. Open **Aurus IPTV**, press **MENU** (or choose *Settings* at the bottom of the channel lists), and add your playlist under *Playlists*.
@@ -38,6 +38,8 @@ Typing a long link with a remote is slow. With a computer on the same network, `
 - **Channel window**: groups, channels with logos and what is on now, and a small picture with the programme's description.
 - **Catch-up**, where the playlist says a channel is recorded: earlier programmes, start over, pause and rewind.
 - **Sound, subtitles and picture size** while watching, plus a sleep timer.
+- **Subtitles your way**: size, colour, weight, kind of letters, background and height, for subtitles sent as text.
+- **Channel change**: the last picture stays, a black screen, or a soft fade.
 - **Sound your way**: Dolby Digital and Dolby Digital Plus passed on to the TV or decoded in the device, shown against what the TV says it takes; clearer speech for sound decoded in the device.
 - **Quality**: channels sent in several qualities follow the connection, or always show the best.
 - **Refresh rate matching**: the TV is switched to the channel's rate (50, 60 or 24 Hz) once you stay on a channel, for even motion.
@@ -72,7 +74,7 @@ The parts that do not depend on Android (playlist and guide parsing, lists, catc
 ## Limits
 
 - Tested on one device, a Xiaomi TV Box S (3rd gen, Android 14, Amlogic), mostly with one provider's HLS playlist. Other boxes and providers may behave differently.
-- The Xtream Codes and portal logins were tested against a stand-in server only, not with a real provider. Portals bring no programme guide of their own: add an EPG link for one.
+- The portal login has loaded and played one real provider's channels; the Xtream Codes login was tested against a stand-in server only. Catch-up through either is untested. Portals bring no programme guide of their own: add an EPG link for one.
 - No recording to disk.
 - Not yet tested: Smooth Streaming and RTSP channels, opening a channel from the home-screen row, DVB bitmap subtitles, channels with several sound tracks on a real provider, catch-up formats other than the "shift" kind, and the "Video hardware" playback mode.
 - A screen-rate change makes the TV go dark for a moment; boxes without seamless switching cannot avoid that.
