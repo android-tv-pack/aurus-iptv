@@ -164,6 +164,7 @@ class MainActivity : Activity() {
         shade = View(this).apply { setBackgroundColor(Color.BLACK); visibility = View.GONE }
         root.addView(shade, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         cues = CueView(this)
+        cues.look(prefs.subLook, false)
         root.addView(cues, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         buildOverlays()
         setContentView(root)
@@ -2353,7 +2354,7 @@ class MainActivity : Activity() {
             visibility = View.GONE
             isClickable = true
         }
-        guideTitle = ui.label(11f, accent, true, lines = 4).apply { letterSpacing = 0.14f; setPadding(u(10), u(24), u(10), 0) }
+        guideTitle = ui.label(11f, accent, true, lines = 8).apply { letterSpacing = 0.14f; setPadding(u(10), u(24), u(10), 0) }
         guideBox.addView(guideTitle)
         guideList = list().apply { adapter = guideAdapter }
         guideBox.addView(guideList, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -2640,6 +2641,14 @@ class MainActivity : Activity() {
         sh.button("Cancel").button("Save", primary = true) { done(e.text.toString().trim()) }.show { page.focus() }
     }
 
+    /** a row for one part of the subtitles' look ([at]: its place in [Prefs.subLook]); stepping it shows a sample */
+    private fun subRow(title: String, desc: String, at: Int, names: Array<String>) = Page.Row(title, desc, { names[prefs.subLook[at].coerceIn(0, names.size - 1)] }) { d ->
+        val l = prefs.subLook.toMutableList()
+        l[at] = (l[at] + (if (d == 0) 1 else d) + names.size) % names.size
+        prefs.subLook = l
+        cues.look(l, true)
+    }
+
     private fun openSettings() {
         if (Plus.settingsAsked { openSettingsNow() }) return
         openSettingsNow()
@@ -2752,6 +2761,12 @@ class MainActivity : Activity() {
                     prefs.clock = !prefs.clock
                     clockTick.run()
                 },
+                subRow("Subtitle size", "Of subtitles sent as text; a sample shows for a moment", 0, arrayOf("Small", "Usual", "Large", "Largest")),
+                subRow("Subtitle colour", "White, or a colour that stands out from the picture", 1, arrayOf("White", "Yellow", "Cyan", "Green")),
+                subRow("Subtitle weight", "How heavy the letters are", 4, arrayOf("Thin", "Regular", "Medium", "Bold")),
+                subRow("Subtitle letters", "Plain, with serifs, all of one width, or narrow", 5, arrayOf("Plain", "Serif", "Typewriter", "Narrow")),
+                subRow("Subtitle background", "A dark edge round the letters, or a dark plate behind them", 2, arrayOf("Edge", "Plate")),
+                subRow("Subtitle height", "Higher, where the TV cuts off the bottom edge", 3, arrayOf("Bottom", "Higher", "Higher still")),
                 Page.Row("While a channel changes", "What is seen until the new channel's picture comes", { if (prefs.blackSwitch) "Black screen" else "Last picture" }) {
                     prefs.blackSwitch = !prefs.blackSwitch
                 },

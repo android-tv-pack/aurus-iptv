@@ -142,6 +142,9 @@ class Prefs(ctx: Context) {
     var decodeEac3: Boolean get() = flag("decodeEac3", decodeDolby); set(v) = put("decodeEac3", v)
     /** speech made clearer in sound that is decoded here: 0 off, 1 on, 2 strong */
     var speech: Int get() = (str("speech").toIntOrNull() ?: 0).coerceIn(0, 2); set(v) = put("speech", v.toString())
+    /** the look of subtitles sent as text: size, colour, background, height, weight, kind of letters (see CueView) */
+    var subLook: List<Int> get() = listOf(1, 0, 0, 0, 2, 0).let { usual -> val l = str("subLook").split(',').mapNotNull { it.toIntOrNull() }; List(usual.size) { l.getOrNull(it) ?: usual[it] } }
+        set(v) = put("subLook", v.joinToString(","))
     var blackSwitch: Boolean get() = flag("blackSwitch", false); set(v) = put("blackSwitch", v)
     /** how see-through the bars over the picture are, in per cent (0 - 50) */
     var glass: Int get() = p.getInt("glass", 10).coerceIn(0, 50); set(v) { p.edit().putInt("glass", v.coerceIn(0, 50)).apply() }
