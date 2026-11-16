@@ -263,7 +263,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
-        screenHeld = false
+        screenHeld = false; main.removeCallbacks(screenFirst)
         Plus.stop(resumeAt != null)
         other = false
         main.removeCallbacksAndMessages(null)
@@ -708,7 +708,6 @@ class MainActivity : Activity() {
                         if (frameGen != g) { frameGen = g; frameN = 0 }
                         if (frameN < frameTimes.size) {
                             frameTimes[frameN++] = t
-                            if (frameN == 36) { val e = Rate.of(frameTimes.copyOfRange(12, 36)); main.post { if (g == playGen) early(e) } }
                             if (frameN == frameTimes.size) {
                                 val fps = Rate.of(frameTimes.copyOfRange(20, frameTimes.size))
                                 if (Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "rated from steps (0.1 ms): " + (21 until frameTimes.size).joinToString(" ") { ((frameTimes[it] - frameTimes[it - 1]) / 100).toString() } + "; own=$own waiting=${waiting.size}")
@@ -939,42 +938,33 @@ class MainActivity : Activity() {
 
     /** the channel has been on for a few seconds: the viewer stays with it */
     private var settled = false
-    private val settle = Runnable {
-        settled = true
-        // (a rate remembered from the last time, not measured this time: see [early])
-        if (!browsing && (rated || channelFps <= 0f)) matchScreen()
-    }
-
-    /**
-     * The rate of the channel's first pictures. A channel whose rate is remembered from the last time may send another
-     * now (some change between programmes), and going by the old one made the screen change twice. So the first
-     * pictures are asked: when they agree with what is remembered the screen is set at once, a second or two into the
-     * channel; else it waits for the measuring to end.
-     */
-    private fun early(fps: Float) {
-        if (rated || browsing || channelFps <= 0f || !prefs.matchRate) return
-        if (fps > 0f && kotlin.math.abs(fps - channelFps) <= 1.5f) { settled = true; main.removeCallbacks(settle); matchScreen() }
-        else Log.i(tag, "#${current + 1} the rate from before (${"%.2f".format(Locale.US, channelFps)}) is not what the first pictures say: the screen waits for the measuring")
-    }
+    private val settle = Runnable { settled = true; if (!browsing) matchScreen() }
     private fun rateKnown() { if (settled || !prefs.rateWait) matchScreen() }
+
+    /** the screen's mode (same resolution) that suits a channel of [fps] pictures a second; 0 = none, the screen stays as it is */
+    private fun modeFor(fps: Float): Int {
+        if (fps <= 0f) return 0
+        @Suppress("DEPRECATION") val d = windowManager.defaultDisplay
+        val cur = d.mode
+        val modes = d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+        val i = Rate.pick(fps, FloatArray(modes.size) { modes[it].refreshRate })
+        return if (i < 0) 0 else modes[i].modeId
+    }
 
     /** switches the screen to the rate of the channel that plays (same resolution), so that motion is even */
     private fun matchScreen() {
         val lp = window.attributes
         var want = 0
+        @Suppress("DEPRECATION") val d = windowManager.defaultDisplay
+        val cur = d.mode
         if (prefs.matchRate) {
-            if (channelFps <= 0f) return
-            @Suppress("DEPRECATION") val d = windowManager.defaultDisplay
-            val cur = d.mode
-            val modes = d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
-            val i = Rate.pick(channelFps, FloatArray(modes.size) { modes[it].refreshRate })
-            // a rate the screen has nothing for: it stays as it is
-            if (i < 0) return
-            want = modes[i].modeId
-            if (want != cur.modeId) Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, modes[i].refreshRate)} a second")
+            want = modeFor(channelFps)
+            // a rate that is not known, or one the screen has nothing for: it stays as it is
+            if (want == 0) return
+            if (want != cur.modeId) Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, d.supportedModes.first { it.modeId == want }.refreshRate)} a second")
         }
         if (lp.preferredDisplayModeId != want) {
-            @Suppress("DEPRECATION") if (want != 0 && want != windowManager.defaultDisplay.mode.modeId) holdForScreen()
+            if (want != 0 && want != cur.modeId) holdForScreen()
             lp.preferredDisplayModeId = want; window.attributes = lp
         }
     }
@@ -994,8 +984,17 @@ class MainActivity : Activity() {
         if (other || held || paused) return
         screenHeld = true
         p.pause()
+        screenTimed = true
         main.removeCallbacks(screenFree); main.postDelayed(screenFree, 4500)
     }
+    /**
+     * A channel whose rate is remembered and is not the screen's: the screen is changed while the channel changes, before
+     * its first picture, so that the dark moment is part of the change and not a break a few seconds into watching.
+     * (After a moment's stay only: while channels are passed through one after another the screen is left alone.)
+     */
+    private val screenFirst = Runnable { if (screenHeld) { screenTimed = false; matchScreen(); if (!screenTimed) screenFree.run() } }
+    /** the screen is being changed, and the wait for it is timed */
+    private var screenTimed = false
     override fun onDestroy() {
         (getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager).unregisterDisplayListener(screenWatch)
         super.onDestroy()
@@ -1081,7 +1080,13 @@ class MainActivity : Activity() {
         // a channel watched before: the screen is set for its rate now, while the channels change, not a second into its picture
         // (while channels are changed one after another the screen stays as it is: a change of its rate makes the TV go dark for a moment)
         if (!again) { settled = false; main.removeCallbacks(settle); if (!preview) main.postDelayed(settle, SETTLE_MS) }
-        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) { channelFps = it; rateKnown() } }
+        screenHeld = false; main.removeCallbacks(screenFree); main.removeCallbacks(screenFirst)
+        if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) {
+            channelFps = it
+            @Suppress("DEPRECATION") val now = windowManager.defaultDisplay.mode.modeId
+            val want = modeFor(it)
+            if (want != 0 && want != now && !other && !held) { screenHeld = true; main.postDelayed(screenFirst, 350) } else rateKnown()
+        } }
         mending = "mend" in trial || i in tryMend || playKey in prefs.mended
         // a channel known to send several sounds: the wanted one is read from the start (the first needs no picking)
         sounds = soundsOf[playKey].orEmpty()
@@ -1120,10 +1125,10 @@ class MainActivity : Activity() {
             p.stop()
             // (the sound comes in over a moment, not at once: at once it can click)
             fader?.cancel(); p.volume = 0f; faded = false
-        screenHeld = false; main.removeCallbacks(screenFree)
             p.setMediaSource(src)
             p.prepare()
-            p.playWhenReady = true
+            // (a channel that waits for the screen to change starts when the screen is there)
+            p.playWhenReady = !screenHeld
         }
         // a portal's channel: the address it plays from is asked for now, each time
         if (c.url.startsWith(Portal.SCHEME)) {
