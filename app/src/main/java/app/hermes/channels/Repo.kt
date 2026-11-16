@@ -215,7 +215,7 @@ object Repo {
         if (cf.exists() && pf.exists()) { index(app, l, s, g); loadSoon(app, s, g); main.post { if (g == gen) changed() } }
         val qf = pastFile(app, s)
         val pastMs = recDays.coerceAtMost(7) * 86_400_000L
-        if (force || !cf.exists() || !pf.exists() || (pastMs > 0 && !qf.exists()) || System.currentTimeMillis() - pf.lastModified() > FRESH_MS) {
+        if (force || !cf.exists() || !pf.exists() || (pastMs > 0 && !qf.exists()) || due(app, s)) {
             if (g == gen) guideNote = "Reading the EPG"
             File(app.filesDir, "guide.tsv").delete()            // (the file of an earlier version, without descriptions)
             main.post { if (g == gen) changed() }
@@ -293,11 +293,13 @@ object Repo {
         val want = gids.filterNotNull().toHashSet()
         val now = System.currentTimeMillis()
         val out = HashMap<String, ArrayList<Guide.Prog>>()
+        val had = HashSet<String>()
         try {
             progFile(app, s).bufferedReader().useLines { lines ->
                 for (line in lines) {
                     val a = line.indexOf('\t')
                     if (a <= 0 || line.substring(0, a) !in want) continue
+                    had.add(line.substring(0, a))
                     val f = line.split('\t', limit = 5)
                     if (f.size < 4) continue
                     val start = f[1].toLongOrNull() ?: continue; val stop = f[2].toLongOrNull() ?: continue
@@ -308,14 +310,29 @@ object Repo {
         for (v in out.values) v.sortBy { it.start }
         if (g != gen) return
         soon = out; soonAt = now
+        // what was read has run out for most channels (many EPGs reach only to the end of the day they were read on)
+        ranOut = had.size >= 20 && out.size * 2 < had.size
+        Log.i(TAG, "guide: programmes soon for ${out.size} of ${had.size} channels it had any for (${(now - progFile(app, s).lastModified()) / 60000} min old)")
+    }
+
+    @Volatile private var ranOut = false
+    /** what is kept of the EPG is to be read anew: it is half a day old, or (not more often than hourly) it has run out */
+    private fun due(app: Context, s: Int): Boolean {
+        val age = System.currentTimeMillis() - progFile(app, s).lastModified()
+        return age > FRESH_MS || (ranOut && age > 3600_000)
     }
 
     /** call now and then: what is "soon" moves on with the clock */
     fun keepFresh(ctx: Context, changed: () -> Unit) {
-        if (busy || lib == null || soon.isEmpty() || System.currentTimeMillis() - soonAt < 1800_000) return
+        if (busy || lib == null || (soon.isEmpty() && !ranOut) || System.currentTimeMillis() - soonAt < 1800_000) return
         val app = ctx.applicationContext
         val s = src; val g = gen
-        Thread({ loadSoon(app, s, g); main.post { if (g == gen) changed() } }, "channels-soon").start()
+        val me = Any(); worker = me
+        Thread({ try {
+            loadSoon(app, s, g); main.post { if (g == gen) changed() }
+            // (an app that is left running is not started anew: the EPG is read again from here)
+            if (g == gen && guideUrl.isNotEmpty() && due(app, s)) guideWork(app, false, { if (g == gen) changed() }, s, g)
+        } finally { if (worker === me) worker = null } }, "channels-soon").start()
     }
 
     fun logo(i: Int): String {
