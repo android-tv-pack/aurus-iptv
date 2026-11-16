@@ -137,6 +137,11 @@ class Prefs(ctx: Context) {
     var bestQuality: Boolean get() = flag("bestQuality", false); set(v) = put("bestQuality", v)
     /** Dolby sound is decoded by the device, not passed on as it is */
     var decodeDolby: Boolean get() = flag("decodeDolby", false); set(v) = put("decodeDolby", v)
+    /** the same, said for each kind of Dolby sound (until said, what [decodeDolby] says) */
+    var decodeAc3: Boolean get() = flag("decodeAc3", decodeDolby); set(v) = put("decodeAc3", v)
+    var decodeEac3: Boolean get() = flag("decodeEac3", decodeDolby); set(v) = put("decodeEac3", v)
+    /** speech made clearer in sound that is decoded here: 0 off, 1 on, 2 strong */
+    var speech: Int get() = (str("speech").toIntOrNull() ?: 0).coerceIn(0, 2); set(v) = put("speech", v.toString())
     var blackSwitch: Boolean get() = flag("blackSwitch", false); set(v) = put("blackSwitch", v)
     /** how see-through the bars over the picture are, in per cent (0 - 50) */
     var glass: Int get() = p.getInt("glass", 10).coerceIn(0, 50); set(v) { p.edit().putInt("glass", v.coerceIn(0, 50)).apply() }

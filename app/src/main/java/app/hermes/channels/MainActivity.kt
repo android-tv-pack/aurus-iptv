@@ -729,10 +729,16 @@ class MainActivity : Activity() {
             out.add(Mp2Renderer(eventHandler, eventListener, audioSink))
         }
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? {
-            val sink = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams) ?: return null
+            // (as the usual output is built, with one step of the app's own in it: speech made clearer)
+            val sink = androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context).setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams).setAudioProcessors(arrayOf(Speech())).build()
             return object : ForwardingAudioSink(sink) {
                 // Dolby sound decoded here, where that is chosen and the device can: the output is then said not to take it as it is
-                private fun kept(f: Format) = prefs.decodeDolby && canDecodeDolby && (f.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_AC3 || f.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_E_AC3 || f.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC)
+                private fun kept(f: Format) = when (f.sampleMimeType) {
+                    androidx.media3.common.MimeTypes.AUDIO_AC3 -> prefs.decodeAc3 && canDecode(androidx.media3.common.MimeTypes.AUDIO_AC3)
+                    androidx.media3.common.MimeTypes.AUDIO_E_AC3, androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC -> prefs.decodeEac3 && canDecode(androidx.media3.common.MimeTypes.AUDIO_E_AC3)
+                    else -> false
+                }
                 override fun supportsFormat(format: Format) = if (kept(format)) false else super.supportsFormat(format)
                 override fun getFormatSupport(format: Format) = if (kept(format)) AudioSink.SINK_FORMAT_UNSUPPORTED else super.getFormatSupport(format)
                 // for a channel whose sound carries wrong times: each piece of sound follows the one before
@@ -1085,10 +1091,81 @@ class MainActivity : Activity() {
         return if (Plus.PRESENT) all.filter { !Plus.hides(l.channels[it]) } else all
     }
 
-    /** the device has a decoder of its own for Dolby sound */
-    private val canDecodeDolby by lazy {
-        try { androidx.media3.exoplayer.mediacodec.MediaCodecUtil.getDecoderInfos(androidx.media3.common.MimeTypes.AUDIO_AC3, false, false).isNotEmpty() &&
-            androidx.media3.exoplayer.mediacodec.MediaCodecUtil.getDecoderInfos(androidx.media3.common.MimeTypes.AUDIO_E_AC3, false, false).isNotEmpty() } catch (e: Exception) { false }
+    /** the device has a decoder of its own for this kind of sound */
+    private val decoders = HashMap<String, Boolean>()
+    private fun canDecode(mime: String) = synchronized(decoders) { decoders.getOrPut(mime) {
+        try { androidx.media3.exoplayer.mediacodec.MediaCodecUtil.getDecoderInfos(mime, false, false).isNotEmpty() } catch (e: Exception) { false } } }
+
+    /** what is done with a kind of Dolby sound, as things are: the choice, and where it cannot be followed, why */
+    private fun dolbyNow(decode: Boolean, encoding: Int, mime: String): String = when {
+        !takes(encoding) -> if (canDecode(mime)) "Decoded here (the TV does not take it)" else "Not played: neither the TV nor this device takes it"
+        decode && !canDecode(mime) -> "Passed on (this device cannot decode it)"
+        decode -> "Decoded here"
+        else -> "Passed on"
+    }
+
+    /** what the TV, or the receiver between, says it takes as it is */
+    private fun tvTakes(): String {
+        val caps = try { androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(this, androidx.media3.common.AudioAttributes.DEFAULT, null) } catch (e: Exception) { return "\u2014" }
+        val parts = ArrayList<String>()
+        if (caps.supportsEncoding(C.ENCODING_AC3)) parts += "Dolby Digital"
+        if (caps.supportsEncoding(C.ENCODING_E_AC3)) parts += "Dolby Digital Plus"
+        if (caps.supportsEncoding(C.ENCODING_E_AC3_JOC)) parts += "Atmos"
+        if (caps.supportsEncoding(C.ENCODING_DTS)) parts += "DTS"
+        return if (parts.isEmpty()) "Plain sound only: Dolby is decoded here" else parts.joinToString(", ")
+    }
+    private fun takes(encoding: Int) = try { androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(this, androidx.media3.common.AudioAttributes.DEFAULT, null).supportsEncoding(encoding) } catch (e: Exception) { false }
+
+    /**
+     * Speech made clearer, in sound that is decoded here (not in sound passed on as it is). Of two channels: what both
+     * carry alike, where speech is, is raised around 2.5 kHz and what differs between them is lowered. Of six: mixed
+     * down to two with more of the centre channel, where speech is.
+     */
+    private inner class Speech : androidx.media3.common.audio.BaseAudioProcessor() {
+        private var six = false
+        private var level = 0
+        private var b0 = 1.0; private var b1 = 0.0; private var b2 = 0.0; private var a1 = 0.0; private var a2 = 0.0
+        private var x1 = 0.0; private var x2 = 0.0; private var y1 = 0.0; private var y2 = 0.0
+        override fun onConfigure(f: androidx.media3.common.audio.AudioProcessor.AudioFormat): androidx.media3.common.audio.AudioProcessor.AudioFormat {
+            level = prefs.speech
+            if (level == 0 || f.encoding != C.ENCODING_PCM_16BIT || (f.channelCount != 2 && f.channelCount != 6)) return androidx.media3.common.audio.AudioProcessor.AudioFormat.NOT_SET
+            six = f.channelCount == 6
+            Log.i(tag, "speech made clearer (${if (level == 1) "on" else "strong"}): ${f.channelCount} channels of sound at ${f.sampleRate} Hz")
+            // a bell around 2.5 kHz, +4 or +7 dB
+            val gain = Math.pow(10.0, (if (level == 1) 4.0 else 7.0) / 40.0)
+            val w = 2 * Math.PI * 2500.0 / f.sampleRate
+            val alpha = Math.sin(w) / (2 * 0.8)
+            val a0 = 1 + alpha / gain
+            b0 = (1 + alpha * gain) / a0; b1 = -2 * Math.cos(w) / a0; b2 = (1 - alpha * gain) / a0; a1 = b1; a2 = (1 - alpha / gain) / a0
+            return androidx.media3.common.audio.AudioProcessor.AudioFormat(f.sampleRate, 2, C.ENCODING_PCM_16BIT)
+        }
+        override fun onFlush(streamMetadata: androidx.media3.common.audio.AudioProcessor.StreamMetadata) { x1 = 0.0; x2 = 0.0; y1 = 0.0; y2 = 0.0 }
+        private fun clip(v: Double) = (if (v > 32767.0) 32767.0 else if (v < -32768.0) -32768.0 else v).toInt().toShort()
+        override fun queueInput(input: java.nio.ByteBuffer) {
+            val frames = input.remaining() / (if (six) 12 else 4)
+            val out = replaceOutputBuffer(frames * 4)
+            if (six) {
+                // (front left, front right, centre, low, back left, back right)
+                val c = if (level == 1) 1.0 else 1.4
+                val k = 1.0 / (1.0 + c * 0.6 + 0.4)
+                for (i in 0 until frames) {
+                    val l = input.short.toDouble(); val r = input.short.toDouble(); val ce = input.short.toDouble(); input.short
+                    val bl = input.short.toDouble(); val br = input.short.toDouble()
+                    out.putShort(clip((l + c * ce + 0.5 * bl) * k * 1.6)); out.putShort(clip((r + c * ce + 0.5 * br) * k * 1.6))
+                }
+            } else {
+                val side = if (level == 1) 0.8 else 0.63
+                val pre = if (level == 1) 0.84 else 0.75
+                for (i in 0 until frames) {
+                    val l = input.short.toDouble(); val r = input.short.toDouble()
+                    val m = (l + r) * 0.5; val sd = (l - r) * 0.5 * side
+                    val y = b0 * m + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                    x2 = x1; x1 = m; y2 = y1; y1 = y
+                    out.putShort(clip((y + sd) * pre)); out.putShort(clip((y - sd) * pre))
+                }
+            }
+            out.flip()
+        }
     }
 
     // ---- the sound comes and goes over a moment (leaving the app, coming back, a new channel): cut off at once it can click
@@ -2554,7 +2631,7 @@ class MainActivity : Activity() {
             Page.Tab("Playback", "Picture and sound are kept in step the standard way, where you can move the sound yourself, or by the box's own video hardware. " +
                 "A channel whose picture stops with the hardware is played the standard way by itself. With the refresh rate on Auto, the screen goes dark for a moment when it changes.",
                 stats = {
-                    listOf("THIS CHANNEL" to techLine().ifEmpty { "\u2014" },
+                    listOf("THIS CHANNEL" to techLine().ifEmpty { "\u2014" }, "THE TV TAKES" to tvTakes(),
                         "SCREEN" to screenLine(),
                         "IN STEP BY" to (if (tunnel) "The video hardware" else if (prefs.hardwareSync) "Standard (this channel does not play with the hardware)" else "Standard" +
                             (if (prefs.soundDelay != 0) ", sound " + (if (prefs.soundDelay > 0) "+" else "") + prefs.soundDelay + " ms" else "")))
@@ -2570,9 +2647,16 @@ class MainActivity : Activity() {
                     selector?.let { it.setParameters(it.buildUponParameters().setForceHighestSupportedBitrate(prefs.bestQuality)) }
                     if (current >= 0) play(current, true)
                 },
-                Page.Row("Dolby sound", "Passed on to the TV as it is, or decoded here to stereo",
-                    { if (!prefs.decodeDolby) "Passed on" else if (canDecodeDolby) "Decoded here" else "Decoded here (this device cannot: passed on)" }) {
-                    prefs.decodeDolby = !prefs.decodeDolby
+                Page.Row("Dolby Digital", "Passed on to the TV as it is, or decoded here to stereo", { dolbyNow(prefs.decodeAc3, C.ENCODING_AC3, androidx.media3.common.MimeTypes.AUDIO_AC3) }) {
+                    prefs.decodeAc3 = !prefs.decodeAc3
+                    if (current >= 0) play(current, true)
+                },
+                Page.Row("Dolby Digital Plus", "The same, for the newer kind. Some soundbars stay silent with it", { dolbyNow(prefs.decodeEac3, C.ENCODING_E_AC3, androidx.media3.common.MimeTypes.AUDIO_E_AC3) }) {
+                    prefs.decodeEac3 = !prefs.decodeEac3
+                    if (current >= 0) play(current, true)
+                },
+                Page.Row("Clearer speech", "Raises voices in sound that is decoded here, not in Dolby passed on", { arrayOf("Off", "On", "Strong")[prefs.speech] }) { d ->
+                    prefs.speech = (prefs.speech + d + 3) % 3
                     if (current >= 0) play(current, true)
                 },
                 Page.Row("Sound delay", "+ plays the sound later, \u2212 earlier. If you hear the words before the lips move (the picture is late), add", {
