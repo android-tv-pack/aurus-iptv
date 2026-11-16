@@ -574,6 +574,13 @@ class MainActivity : Activity() {
                 }
             })
         }
+        // sound the device has no decoder for (MPEG Layer II on some TVs) is decoded by the app; the device's own come first
+        override fun buildAudioRenderers(context: Context, extensionRendererMode: Int, mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
+                                         enableDecoderFallback: Boolean, audioSink: AudioSink, eventHandler: android.os.Handler,
+                                         eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener, out: ArrayList<androidx.media3.exoplayer.Renderer>) {
+            super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+            out.add(Mp2Renderer(eventHandler, eventListener, audioSink))
+        }
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? {
             val sink = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams) ?: return null
             return object : ForwardingAudioSink(sink) {
@@ -894,6 +901,11 @@ class MainActivity : Activity() {
         }
         override fun onTracksChanged(t: Tracks) {
             val parts = ArrayList<String>()
+            // what the device cannot play is said once, with its kind: such a track is silently left out otherwise
+            for (g in t.groups) for (i in 0 until g.length) if (!g.isTrackSupported(i)) {
+                val f = g.getTrackFormat(i)
+                Log.w(tag, "#${current + 1} this device cannot play ${f.sampleMimeType} ${f.codecs.orEmpty()} ${if (f.channelCount > 0) "${f.channelCount}ch" else ""} ${if (f.sampleRate > 0) "${f.sampleRate}Hz" else ""} (support ${g.getTrackSupport(i)})")
+            }
             for (g in t.groups) for (i in 0 until g.length) if (g.isTrackSelected(i)) {
                 val f = g.getTrackFormat(i)
                 val what = when (g.type) { C.TRACK_TYPE_VIDEO -> "video"; C.TRACK_TYPE_AUDIO -> "audio"; C.TRACK_TYPE_TEXT -> "text"; else -> "other" }
@@ -2240,7 +2252,8 @@ class MainActivity : Activity() {
                 },
                 Page.Row("Open-source parts", "What the app is built with", { "" }, steps = false) {
                     Sheet(ui, "Open-source parts", "AndroidX Media3 (ExoPlayer), by The Android Open Source Project, under the Apache License 2.0.\n\n" +
-                        "Kotlin, by JetBrains and contributors, under the Apache License 2.0.")
+                        "Kotlin, by JetBrains and contributors, under the Apache License 2.0.\n\n" +
+                        "The MPEG Layer II sound decoder follows pl_mpeg by Dominic Szablewski (MIT licence), itself based on kjmp2 by Martin J. Fiedler.")
                         .button("Close", primary = true).show { page.focus() }
                 }
             ))

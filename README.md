@@ -28,7 +28,7 @@ The pictures show a demonstration playlist of open films (Big Buck Bunny and Tea
 
 To update, install the new APK over the old one: playlists, favourites and settings are kept, because every release is signed with the same key. (If you build and sign it yourself, remove the old copy first, as the signature differs.)
 
-Typing a long link with a remote is slow. With a computer on the same network, `./send-playlist.sh <tv-address>` sends it over adb without showing or storing it.
+Typing a long link with a remote is slow. With a computer on the same network, `./send-playlist.sh <tv-address>` sends it over adb without showing or storing it. `./send-epg.sh <tv-address>` does the same for an EPG link.
 
 ## What it does
 
