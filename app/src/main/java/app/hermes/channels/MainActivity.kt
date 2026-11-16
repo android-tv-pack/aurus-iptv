@@ -220,6 +220,8 @@ class MainActivity : Activity() {
         }
         val list = take("playlist.txt")
         if (list.isNotEmpty()) { ensureSource(); prefs.playlist = list[0]; list.getOrNull(1)?.let { prefs.extra = it }; Repo.forget(this); Log.i(tag, "a playlist link was taken") }
+        val films = take("films.txt")
+        if (films.isNotEmpty() && app.hermes.channels.core.Films.link(films[0]) != null) { prefs.films = films[0]; Log.i(tag, "a library link was taken") }
         val guide = take("guide.txt")
         if (guide.isNotEmpty()) { prefs.setEpgOf(prefs.source, prefs.addEpg(guide[0])); Repo.forgetGuide(this, prefs.source); Log.i(tag, "a guide link was taken") }
     }
@@ -228,6 +230,8 @@ class MainActivity : Activity() {
     private fun read(i: Intent) {
         val d = i.data
         if (d != null && d.scheme == "channels" && d.host == "play") wanted = d.lastPathSegment
+        // channels://films opens the films and series
+        if ((d != null && d.scheme == "channels" && d.host == "films") || i.getBooleanExtra("films", false)) { i.removeExtra("films"); i.data = null; wantFilms = true }
         if (i.hasExtra("index")) { wanted = "#" + i.getIntExtra("index", 1); i.removeExtra("index") }
         testStream = i.getStringExtra("test")
         // (for testing a channel that misbehaves) without its sound, or with other ways of reading the stream
@@ -1308,7 +1312,29 @@ class MainActivity : Activity() {
         }
     }
     override fun onPause() { super.onPause(); fadeTo(0f, 90) }
-    override fun onResume() { super.onResume(); if (faded) fadeTo(1f, 220) }
+    override fun onResume() { super.onResume(); if (faded) fadeTo(1f, 220); if (wantFilms) { wantFilms = false; openFilms() } }
+    private var wantFilms = false
+
+    // ---- films and series: a library beside the channels, with screens of its own (FilmsActivity)
+    private fun openFilms() {
+        if (prefs.films.isEmpty()) askFilms() else startActivity(Intent(this, FilmsActivity::class.java))
+    }
+    private fun askFilms() {
+        link("Films and series", "The link of the library, as your provider gives it (some call it a VPortal link). It begins with portal::[key: and holds your subscription key: it is kept only inside this app.",
+            "portal::[key:\u2026]http://\u2026", "") { t ->
+            if (t.isEmpty()) return@link
+            if (app.hermes.channels.core.Films.link(t) == null) Sheet(ui, "That is not a library link", "It has the form portal::[key:YOUR-KEY]http://address/ and is given whole, as the provider shows it.").button("Close", primary = true).show { page.focus() }
+            else { prefs.films = t; reopenSettings() }
+        }
+    }
+    private fun filmsSheet() {
+        if (prefs.films.isEmpty()) { askFilms(); return }
+        Sheet(ui, "Films and series", "The library your provider offers beside its channels.")
+            .item("Open") { openFilms() }
+            .item("Change the link") { askFilms() }
+            .item("Remove") { prefs.films = ""; reopenSettings() }
+            .button("Close").show { if (page.isOpen) page.focus() }
+    }
 
     /** the channel that is on is played by another engine (an extra) */
     private var other = false
@@ -2761,6 +2787,7 @@ class MainActivity : Activity() {
                 }, rows = prefs.sources.map { (id, name) ->
                     Page.Row(name, prefs.channelCount(id).let { if (it > 0) num(it) + " channels" else "Not read yet" }, { if (id == prefs.source) "\u2713  Watching" else "" }, steps = false) { playlistSheet(id) }
                 } + Page.Row("\uFF0B  Add a playlist", if (prefs.sources.isEmpty()) "Give the link of your playlist to start" else "Another provider's link, or a list of your own", { "" }, steps = false) { addSource() }
+                    + Page.Row("Films and series", "A library of films that some providers offer beside their channels", { if (prefs.films.isEmpty()) "Add a link" else "Open" }, steps = false) { filmsSheet() }
             ),
             Page.Tab("EPG", "The EPG (electronic programme guide) tells what is on now and later. Most playlists name one of their own. You can also save EPGs here " +
                 "and choose, for each playlist, which one it takes its programmes from. An EPG is read again by itself twice a day; a large one takes about a minute.",

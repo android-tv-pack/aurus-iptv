@@ -36,6 +36,11 @@
             </intent-filter>
         </activity>
 
+        <!-- films and series: the library, and the player for one of them -->
+        <activity android:name=".FilmsActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize|screenLayout" />
+        <activity android:name=".FilmPlayActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize|screenLayout" />
         <receiver android:name=".UpdateReceiver" android:exported="false" />
 
         <receiver android:name=".HomeReceiver" android:exported="true">

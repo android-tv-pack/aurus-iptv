@@ -79,6 +79,19 @@ class Prefs(ctx: Context) {
     /** (a link given to one playlist directly, as earlier versions kept it, becomes an EPG of its own) */
     fun migrateEpg() { if (guide.isNotEmpty() && epgOf(source) == 0) { setEpgOf(source, addEpg(guide)); guide = "" } }
 
+    // ---- films and series (a library some providers offer beside their channels)
+    /** the library's link; it holds the subscription key, like a playlist's */
+    var films: String get() = str("films"); set(v) = put("films", v.trim())
+    /** where a film was left (ms), by its number in the library; 0 = not begun, or seen to the end */
+    fun filmAt(id: String): Long = lines("filmsAt").firstOrNull { it.startsWith("$id\t") }?.substringAfter('\t')?.toLongOrNull() ?: 0L
+    fun setFilmAt(id: String, ms: Long) {
+        if (id.isEmpty()) return
+        val rest = lines("filmsAt").filter { !it.startsWith("$id\t") }
+        put("filmsAt", ((if (ms > 0L) listOf("$id\t$ms") else emptyList()) + rest).take(300).joinToString("\n"))
+    }
+    /** the height films are asked for: "" = the stream chooses as the connection allows */
+    var filmHeight: String get() = str("filmHeight"); set(v) = put("filmHeight", v)
+
     var favs: Set<String> get() = lines(pre + "favs").toSet(); set(v) = put(pre + "favs", v.joinToString("\n"))
     var recents: List<String> get() = lines(pre + "recents"); set(v) = put(pre + "recents", v.joinToString("\n"))
     /** the channel that played last (see Library.keyOf) and the list it was chosen from */

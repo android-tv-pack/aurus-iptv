@@ -10,11 +10,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
-/** Channel logos: small, kept in memory, fetched a few at a time. */
+/** Channel logos and film posters: small, kept in memory, fetched a few at a time. */
 object Images {
     private val pool = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
-    private val cache = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
+    private val cache = object : LruCache<String, Bitmap>(20 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val missing = HashSet<String>()
