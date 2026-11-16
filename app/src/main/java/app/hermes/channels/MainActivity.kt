@@ -459,7 +459,10 @@ class MainActivity : Activity() {
             var flags = tsFlags
             val codecs = format.codecs
             if (!codecs.isNullOrEmpty()) {
-                if (!androidx.media3.common.MimeTypes.containsCodecsCorrespondingToMimeType(codecs, androidx.media3.common.MimeTypes.AUDIO_AAC)) flags = flags or DefaultTsPayloadReaderFactory.FLAG_IGNORE_AAC_STREAM
+                // (a list that names no sound at all is not believed: many name the picture only and send sound with it;
+                // for the same reason the tracks are taken from the stream, not from the list: setAllowChunklessPreparation(false))
+                val namesSound = !androidx.media3.common.util.Util.getCodecsOfType(codecs, C.TRACK_TYPE_AUDIO).isNullOrEmpty()
+                if (namesSound && !androidx.media3.common.MimeTypes.containsCodecsCorrespondingToMimeType(codecs, androidx.media3.common.MimeTypes.AUDIO_AAC)) flags = flags or DefaultTsPayloadReaderFactory.FLAG_IGNORE_AAC_STREAM
                 if (!androidx.media3.common.MimeTypes.containsCodecsCorrespondingToMimeType(codecs, androidx.media3.common.MimeTypes.VIDEO_H264)) flags = flags or DefaultTsPayloadReaderFactory.FLAG_IGNORE_H264_STREAM
             }
             val captions = if (muxedCaptionFormats != null) { flags = flags or DefaultTsPayloadReaderFactory.FLAG_OVERRIDE_CAPTION_DESCRIPTORS; muxedCaptionFormats }
@@ -584,7 +587,7 @@ class MainActivity : Activity() {
     private fun source(address: String): MediaSource {
         val item = MediaItem.fromUri(address)
         return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
-            HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(if ("stock" !in trial) Pieces(align, mending) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+            HlsMediaSource.Factory(http).setAllowChunklessPreparation(false).setLoadErrorHandlingPolicy(patient).setExtractorFactory(if ("stock" !in trial) Pieces(align, mending) else DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
         else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(patient).createMediaSource(item)
     }
 
@@ -1295,7 +1298,7 @@ class MainActivity : Activity() {
         override fun source(address: String): MediaSource {
             val item = MediaItem.fromUri(address)
             return if (Util.inferContentType(Uri.parse(address)) == C.CONTENT_TYPE_HLS)
-                HlsMediaSource.Factory(http).setLoadErrorHandlingPolicy(patient).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+                HlsMediaSource.Factory(http).setAllowChunklessPreparation(false).setLoadErrorHandlingPolicy(patient).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
             else DefaultMediaSourceFactory(http, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(patient).createMediaSource(item)
         }
         override fun favourites(): List<Int> = listed(Library.FAVS)
