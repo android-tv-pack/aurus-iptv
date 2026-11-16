@@ -561,6 +561,33 @@ class MainActivity : Activity() {
     private var firstPicture = false
     private var videoAspect = 16f / 9f
     private var formatLine = ""
+    /** how much of the channel arrives for each second it plays, in kbit (from the pieces fetched; 0 = not known yet) */
+    private var streamKbps = 0L
+
+    /**
+     * What the channel that plays is made of, in one line: the picture's size, how it is coded, whether it is HDR, how
+     * many pictures a second, how much data a second, and the sound. It is what the provider sends; the app plays it as it is.
+     */
+    private fun techLine(): String {
+        val p = player ?: return ""
+        val parts = ArrayList<String>()
+        val v = p.videoFormat ?: tracks(C.TRACK_TYPE_VIDEO).firstOrNull { it.selected }?.format
+        if (v != null && v.width > 0) {
+            var x = "${v.width} \u00D7 ${v.height}"
+            when (v.sampleMimeType) { "video/avc" -> "H.264"; "video/hevc" -> "H.265"; "video/mpeg2" -> "MPEG-2"; "video/av01" -> "AV1"; "video/dolby-vision" -> "Dolby Vision"; else -> null }?.let { x += "  $it" }
+            when (v.colorInfo?.colorTransfer) { C.COLOR_TRANSFER_ST2084 -> "HDR10"; C.COLOR_TRANSFER_HLG -> "HLG"; else -> null }?.let { x += "  $it" }
+            parts += x
+        }
+        if (channelFps > 0f) parts += "${Math.round(channelFps)} a second"
+        if (streamKbps > 0) parts += (if (streamKbps >= 1000) "%.1f Mbit/s".format(Locale.US, streamKbps / 1000f) else "$streamKbps kbit/s")
+        val a = p.audioFormat ?: tracks(C.TRACK_TYPE_AUDIO).firstOrNull { it.selected }?.format
+        if (a != null) {
+            val kind = when (a.sampleMimeType) { "audio/mp4a-latm" -> "AAC"; "audio/mpeg-L2" -> "MPEG audio"; "audio/mpeg" -> "MP3"; "audio/ac3" -> "Dolby Digital"; "audio/eac3" -> "Dolby Digital Plus"; else -> "" }
+            val ch = when (a.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> "" }
+            listOf(kind, ch).filter { it.isNotEmpty() }.joinToString(" ").let { if (it.isNotEmpty()) parts += it }
+        }
+        return parts.joinToString("  \u00B7  ")
+    }
 
     /** the sound's clock, moved by the "Sound delay" setting: the picture follows this clock */
     private inner class Renderers(ctx: Context) : DefaultRenderersFactory(ctx) {
@@ -721,6 +748,10 @@ class MainActivity : Activity() {
             override fun onLoadCompleted(t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, l: androidx.media3.exoplayer.source.LoadEventInfo, d: androidx.media3.exoplayer.source.MediaLoadData) {
                 // pieces that take as long to arrive as they last: the connection is no faster than the channel
                 val lasts = d.mediaEndTimeMs - d.mediaStartTimeMs
+                if (d.dataType == C.DATA_TYPE_MEDIA && lasts > 500 && d.mediaStartTimeMs >= 0 && l.bytesLoaded > 0) {
+                    val k = l.bytesLoaded * 8 / lasts
+                    streamKbps = if (streamKbps == 0L) k else (streamKbps * 2 + k) / 3
+                }
                 if (d.dataType == C.DATA_TYPE_MEDIA && lasts > 0 && d.mediaStartTimeMs >= 0) {
                     if (l.loadDurationMs > 2000 && l.loadDurationMs >= lasts * 9 / 10) {
                         slowPieces++
@@ -934,7 +965,7 @@ class MainActivity : Activity() {
         firstPicture = false
         formatLine = ""
         lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
-        waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) { gaveUp = false; slowPieces = 0; slowSaid = false }
+        waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) { gaveUp = false; slowPieces = 0; slowSaid = false; streamKbps = 0L }
         main.removeCallbacks(tryLater); laterPending = false
         playGen++
         startedAt = SystemClock.elapsedRealtime()
@@ -1025,6 +1056,7 @@ class MainActivity : Activity() {
                 else if (g.type == C.TRACK_TYPE_AUDIO && kind != null) parts += kind
             }
             formatLine = parts.joinToString("  ·  ")
+            if (infoBar.alpha > 0f) fillInfo()
             val sounds = tracks(C.TRACK_TYPE_AUDIO).size; val subs = tracks(C.TRACK_TYPE_TEXT).size
             if (sounds > 1 || subs > 0) Log.i(tag, "#${current + 1} tracks: $sounds sound, $subs subtitles")
             if (optionsOpen) refreshChips()
@@ -1120,6 +1152,7 @@ class MainActivity : Activity() {
     private lateinit var infoLeft: TextView
     private lateinit var infoProg: Bar
     private lateinit var infoHint: TextView
+    private lateinit var infoTech: TextView
     private lateinit var chipRow: LinearLayout
     private val chips = ArrayList<TextView>()
     /** the bar is up with its three choices (sound, subtitles, picture size) to step through */
@@ -1154,8 +1187,11 @@ class MainActivity : Activity() {
         col.addView(infoTimes, LinearLayout.LayoutParams(-2, -2).apply { topMargin = u(5) })
         infoNext = ui.label(11.5f, white(160))
         col.addView(infoNext, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
+        // what the channel is made of (see [techLine])
+        infoTech = ui.label(10.5f, white(150))
+        col.addView(infoTech, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(6) })
         infoHint = ui.label(10f, white(105)).apply { text = "Hold OK   sound, subtitles, picture size" }
-        col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
+        col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
         chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
         for (i in 0..6) {
             val t = ui.label(11.5f, Color.WHITE, true).apply {
@@ -1207,6 +1243,7 @@ class MainActivity : Activity() {
         }
         infoNext.text = if (next != null) "Next  " + hm(next.start) + "   " + next.title else ""
         infoNext.visibility = if (next != null) View.VISIBLE else View.GONE
+        techLine().let { infoTech.text = it; infoTech.visibility = if (it.isEmpty()) View.GONE else View.VISIBLE }
         infoHint.text = when {
             behind || paused -> "\u25C0 \u25B6  one minute        OK  " + (if (paused) "play" else "pause") + "        BACK  what is on now        HOLD OK  more"
             canShift() -> "Hold OK   pause, start over, sound, subtitles, picture size"
@@ -2299,7 +2336,7 @@ class MainActivity : Activity() {
             Page.Tab("Playback", "Picture and sound are kept in step the standard way, where you can move the sound yourself, or by the box's own video hardware. " +
                 "A channel whose picture stops with the hardware is played the standard way by itself. With the refresh rate on Auto, the screen goes dark for a moment when it changes.",
                 stats = {
-                    listOf("THIS CHANNEL" to formatLine.ifEmpty { "\u2014" } + (if (channelFps > 0f) "\n" + Math.round(channelFps) + " pictures a second" else ""),
+                    listOf("THIS CHANNEL" to techLine().ifEmpty { "\u2014" },
                         "SCREEN" to screenLine(),
                         "IN STEP BY" to (if (tunnel) "The video hardware" else if (prefs.hardwareSync) "Standard (this channel does not play with the hardware)" else "Standard" +
                             (if (prefs.soundDelay != 0) ", sound " + (if (prefs.soundDelay > 0) "+" else "") + prefs.soundDelay + " ms" else "")))
