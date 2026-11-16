@@ -37,6 +37,27 @@ object Rate {
         return if (fps in 10f..130f) fps else 0f
     }
 
+    /**
+     * Pictures a second from the times a stream itself gives its pictures (microseconds, in the order they are sent, which
+     * is not the order they are shown in). 0 when they do not say it plainly: then the pictures shown have to be timed.
+     * Two pictures with one time (the two halves of a picture, sent one by one) count once. The pictures that come last
+     * in the order of sending leave gaps at the end of the order of showing: only the usual step is counted.
+     * Always one of the usual rates, and never under 23: a stream that gives a time to every second or third picture
+     * only would come out as half or a third of its rate.
+     */
+    fun early(times: LongArray): Float {
+        val t = times.sortedArray().distinct()
+        if (t.size < 24) return 0f
+        val steps = LongArray(t.size - 1) { t[it + 1] - t[it] }
+        val median = steps.sortedArray()[steps.size / 2]
+        if (median <= 0L) return 0f
+        val good = steps.filter { abs(it - median) * 8 <= median }
+        if (good.size * 10 < steps.size * 7) return 0f
+        val fps = 1_000_000f * good.size / good.sum()
+        val near = usualRates.minByOrNull { abs(it - fps) }!!
+        return if (near >= 23f && abs(near - fps) <= near * 0.004f) near else 0f
+    }
+
     private val usualRates = floatArrayOf(23.976f, 24f, 25f, 29.97f, 30f, 50f, 59.94f, 60f)
 
     /** a roughly measured rate (one step between two pictures, some streams give times in whole milliseconds) as the usual rate it stands for */

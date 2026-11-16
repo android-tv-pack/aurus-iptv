@@ -50,4 +50,32 @@ class RateTest {
         assertEquals(-1, Rate.pick(25f, floatArrayOf(60f)))
         assertEquals(1, Rate.pick(25f, floatArrayOf(60f, 25f)))
     }
+
+    private fun ms(vararg v: Int) = LongArray(v.size) { v[it] * 1000L }
+
+    @Test fun earlyTakesTheStepOfPicturesSentOutOfOrder() {
+        // 25 a second, sent out of the order of showing, the last ones leaving gaps
+        val t = ms(0, 160, 80, 40, 120, 320, 240, 200, 280, 480, 400, 360, 440, 640, 560, 520, 600, 800, 720, 680, 760, 960, 880, 840, 920, 1120, 1040, 1000, 1080, 1280, 1200, 1160, 1240, 1440, 1360, 1320, 1400, 1600, 1520, 1480, 1560, 1760, 1680, 1640, 1720, 1920, 1840, 1800, 1880, 1960, 2000, 2160, 2080, 2040, 2120, 2320, 2240, 2200, 2280, 2480, 2400, 2360, 2440, 2640)
+        assertEquals(25f, Rate.early(t), 0.01f)
+    }
+
+    @Test fun earlyCountsTwoHalvesWithOneTimeOnce() {
+        val t = LongArray(64) { (it / 2) * 40_000L }
+        assertEquals(25f, Rate.early(t), 0.01f)
+    }
+
+    @Test fun earlyTellsFilmRatesApart() {
+        assertEquals(23.976f, Rate.early(LongArray(64) { it * 3753L * 100 / 9 + (it * 75L / 100) * 100 / 9 }), 0.001f)
+        assertEquals(24f, Rate.early(LongArray(64) { it * 3750L * 100 / 9 }), 0.001f)
+        assertEquals(59.94f, Rate.early(LongArray(64) { (it * 1501.5).toLong() * 100 / 9 }), 0.001f)
+        assertEquals(50f, Rate.early(LongArray(64) { it * 20_000L }), 0.001f)
+    }
+
+    @Test fun earlySaysNothingWhenTheTimesAreFew() {
+        // a time to every second picture of 25 a second: would read as 12.5
+        assertEquals(0f, Rate.early(LongArray(64) { it * 80_000L }), 0f)
+        // uneven
+        assertEquals(0f, Rate.early(LongArray(64) { it * 40_000L + (if (it % 2 == 0) 0 else 15_000) }), 0f)
+        assertEquals(0f, Rate.early(LongArray(10) { it * 40_000L }), 0f)
+    }
 }

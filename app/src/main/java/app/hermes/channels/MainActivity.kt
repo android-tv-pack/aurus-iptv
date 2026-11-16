@@ -375,6 +375,10 @@ class MainActivity : Activity() {
      * On that channel the sound's times also ran at about half speed, so the player kept losing and finding its
      * place. For such a channel the sound is therefore timed by how much of it has been played ([steadySound]).
      */
+    /** the times the stream itself gives its first pictures, as they are read (long before they are shown) */
+    private class First { val t = LongArray(64); var n = 0 }
+    @Volatile private var first = First()
+
     private class Align {
         var refIsVideo: Boolean? = null
         /** the piece of the stream the two above were noted in */
@@ -453,7 +457,7 @@ class MainActivity : Activity() {
                                      timestampAdjuster: androidx.media3.common.util.TimestampAdjuster, responseHeaders: MutableMap<String, MutableList<String>>,
                                      sniffingExtractorInput: androidx.media3.extractor.ExtractorInput, playerId: androidx.media3.exoplayer.analytics.PlayerId): androidx.media3.exoplayer.hls.HlsMediaChunkExtractor {
             val piece = Any()
-            val only = pick; val key = playKey; val gen = playGen
+            val only = pick; val key = playKey; val gen = playGen; val fi = first
             // (as the usual reader is set up: captions sent inside the picture are offered, and what the list of pieces
             // says the stream does not hold is not looked for)
             var flags = tsFlags
@@ -481,9 +485,21 @@ class MainActivity : Activity() {
                         if (only >= 0 && n != only) return null
                     }
                     val r = d.createPayloadReader(streamType, esInfo) ?: return null
+                    val isVideo = streamType == 0x01 || streamType == 0x02 || streamType == 0x10 || streamType == 0x1B || streamType == 0x24
+                    // the picture's own times are noted as they are read: they tell the channel's rate before a picture is shown
+                    if (isVideo && (!mend || "asis" in trial)) return object : androidx.media3.extractor.ts.TsPayloadReader {
+                        override fun init(t: androidx.media3.common.util.TimestampAdjuster, o: androidx.media3.extractor.ExtractorOutput, g: androidx.media3.extractor.ts.TsPayloadReader.TrackIdGenerator) = r.init(t, o, g)
+                        override fun seek() = r.seek()
+                        override fun consume(data: androidx.media3.common.util.ParsableByteArray, flags: Int) {
+                            if (fi.n < fi.t.size && (flags and androidx.media3.extractor.ts.TsPayloadReader.FLAG_PAYLOAD_UNIT_START_INDICATOR) != 0 && data.bytesLeft() >= 14) {
+                                val a = data.data; val p = data.position
+                                if ((a[p + 7].toInt() and 255) shr 6 >= 2 && a[p] == 0.toByte() && a[p + 1] == 0.toByte() && a[p + 2] == 1.toByte()) noteFirst(fi, Stamp.read(a, p + 9), gen)
+                            }
+                            r.consume(data, flags)
+                        }
+                    }
                     // (0x15 = notes beside the programme, 0x06 may be subtitles: neither has a part in this)
                     if (!mend || streamType == 0x15 || streamType == 0x06 || "asis" in trial) return r
-                    val isVideo = streamType == 0x01 || streamType == 0x02 || streamType == 0x10 || streamType == 0x1B || streamType == 0x24
                     return object : androidx.media3.extractor.ts.TsPayloadReader {
                         var logged = 0
                         override fun init(t: androidx.media3.common.util.TimestampAdjuster, o: androidx.media3.extractor.ExtractorOutput, g: androidx.media3.extractor.ts.TsPayloadReader.TrackIdGenerator) = r.init(t, o, g)
@@ -496,6 +512,7 @@ class MainActivity : Activity() {
                                 if (has >= 2 && a[p] == 0.toByte() && a[p + 1] == 0.toByte() && a[p + 2] == 1.toByte()) {
                                     val shown = Stamp.read(a, p + 9)
                                     val t = if (both) Stamp.read(a, p + 14) else shown
+                                    if (isVideo && fi.n < fi.t.size) noteFirst(fi, shown, gen)
                                     if (!al.decided) {
                                         // (only within one piece of the stream: where sound comes in pieces of its own, the two
                                         // are fetched for different moments, and their times say nothing about each other)
@@ -928,8 +945,47 @@ class MainActivity : Activity() {
         }
     }
 
+    /** one more of the stream's own times for its pictures (on the thread that reads the stream) */
+    private fun noteFirst(fi: First, stamp: Long, gen: Int) {
+        fi.t[fi.n++] = stamp * 100 / 9
+        if (fi.n == fi.t.size) {
+            val fps = Rate.early(fi.t)
+            if (Log.isLoggable(tag, Log.DEBUG)) Log.d(tag, "the stream's own times for its first pictures, ms: " + fi.t.joinToString(" ") { ((it - fi.t[0]) / 1000).toString() })
+            main.post { if (gen == playGen) readRate(fps) }
+        }
+    }
+
+    /**
+     * What the stream's own times say of the channel's rate ([fps]; 0 = they do not say it plainly), a moment after the
+     * channel was asked for and as a rule before its first picture. Where they say it, this is the channel's rate: it is
+     * what the screen is set by and what is remembered, and the rate timed from the pictures shown is not asked (timing
+     * took some channels of 50 a second for 60, differently from one visit to the next, and the screen went dark for it
+     * seconds into watching). Halves of pictures sent one by one read as half the rate shown: the screen's rate is the
+     * same for both.
+     */
+    private fun readRate(fps: Float) {
+        val known = if (playKey.isNotEmpty()) prefs.rate(playKey) else 0f
+        Log.i(tag, "#${current + 1} ${"%.2f".format(Locale.US, fps)} pictures a second by the stream's own times (${SystemClock.elapsedRealtime() - startedAt} ms in" + (if (known > 0f) ", remembered ${"%.2f".format(Locale.US, known)}" else "") + ")")
+        // (a rate the stream declared, or one timed already, gives way to it as well)
+        if (fps <= 0f || own) return
+        rated = true; own = true
+        channelFps = fps
+        if (playKey.isNotEmpty() && kotlin.math.abs(known - fps) > 0.3f) prefs.setRate(playKey, fps)
+        page.refresh()
+        if (browsing || other || !prefs.matchRate) return
+        val g = playGen
+        val go = Runnable { if (g == playGen && !browsing) matchScreen() }
+        // (after a moment's stay only, as with a remembered rate)
+        val wait = 350 - (SystemClock.elapsedRealtime() - startedAt)
+        if (wait > 0) main.postDelayed(go, wait) else go.run()
+    }
+    /** the rate of the channel that plays was read from the stream's own times */
+    private var own = false
+    private var ownSaid = false
+
     /** the channel's rate is known ([how]: declared by the stream, timed from its first pictures, or counted) */
     private fun gotRate(fps: Float, how: String) {
+        if (own && fps > 0f && how != "") { if (!ownSaid) { ownSaid = true; Log.i(tag, "#${current + 1} (shown: ${"%.2f".format(Locale.US, fps)} pictures a second, $how, ${SystemClock.elapsedRealtime() - startedAt} ms in)") }; return }
         if (rated || fps <= 0f) return
         rated = true
         channelFps = fps
@@ -965,7 +1021,7 @@ class MainActivity : Activity() {
             want = modeFor(channelFps)
             // a rate that is not known, or one the screen has nothing for: it stays as it is
             if (want == 0) return
-            if (want != cur.modeId) Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, d.supportedModes.first { it.modeId == want }.refreshRate)} a second")
+            if (want != cur.modeId && lp.preferredDisplayModeId != want) Log.i(tag, "screen: ${"%.2f".format(Locale.US, cur.refreshRate)} to ${"%.2f".format(Locale.US, d.supportedModes.first { it.modeId == want }.refreshRate)} a second")
         }
         if (lp.preferredDisplayModeId != want) {
             if (want != 0 && want != cur.modeId) holdForScreen()
@@ -1067,7 +1123,7 @@ class MainActivity : Activity() {
         setTunnel(prefs.hardwareSync && i !in noTunnel)
         firstPicture = false
         formatLine = ""
-        lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; channelFps = 0f
+        lastFrames = -1; stuck = 0; rateAt = 0L; rated = false; own = false; ownSaid = false; channelFps = 0f
         waitSince = 0L; goodSince = 0L; busyAt = 0L; if (!again) { gaveUp = false; slowPieces = 0; slowSaid = false; streamKbps = 0L }
         noSound = false
         main.removeCallbacks(tryLater); laterPending = false
@@ -1084,6 +1140,7 @@ class MainActivity : Activity() {
         // a channel watched before: the screen is set for its rate now, while the channels change, not a second into its picture
         // (while channels are changed one after another the screen stays as it is: a change of its rate makes the TV go dark for a moment)
         if (!again) { settled = false; main.removeCallbacks(settle); if (!preview) main.postDelayed(settle, SETTLE_MS) }
+        first = First()
         screenHeld = false; main.removeCallbacks(screenFree); main.removeCallbacks(screenFirst)
         if (!preview && !browsing && prefs.matchRate && playKey.isNotEmpty()) prefs.rate(playKey).let { if (it > 0f) {
             channelFps = it
