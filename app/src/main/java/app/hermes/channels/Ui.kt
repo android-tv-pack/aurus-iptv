@@ -18,8 +18,9 @@ class Ui(val a: Activity) {
     fun u(n: Int): Int = u(n.toFloat())
     fun white(alpha: Int) = Color.argb(alpha, 255, 255, 255)
 
+    private val textScale = Plus.textScale(Prefs(a))
     fun label(size: Float, color: Int, medium: Boolean = false, lines: Int = 1) = TextView(a).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_PX, u(size).toFloat())
+        setTextSize(TypedValue.COMPLEX_UNIT_PX, u(size) * textScale)
         setTextColor(color)
         maxLines = lines
         ellipsize = TextUtils.TruncateAt.END

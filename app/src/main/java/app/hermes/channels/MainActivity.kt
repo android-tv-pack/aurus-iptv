@@ -174,7 +174,8 @@ class MainActivity : Activity() {
         root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
         setContentView(root)
         page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME.removeSuffix("-beta") + (if (isBeta) "  \u00B7  BETA" else ""))
-        resumeAt?.let { resumeAt = null; page.resume(it); main.post { if (!page.isOpen) openSettings() } }
+        Plus.start(plusHost)
+        resumeAt?.let { resumeAt = null; if (it.first >= 0) { page.resume(it); main.post { if (!page.isOpen) openSettings() } } }
         takeDropped()
         favs = prefs.favs.toMutableSet()
         recents = prefs.recents
@@ -218,6 +219,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        Plus.resume()
         buildPlayer()
         // a newer version is looked for once a day (shown in the settings), and the installer's news redraws them
         Update.onChange = { main.post { page.refresh() } }
@@ -237,6 +239,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        Plus.stop(resumeAt != null)
         main.removeCallbacksAndMessages(null)
         sleepMin = 0; sleepAt = 0L; sleepWarned = false
         shade.visibility = View.GONE
@@ -257,7 +260,7 @@ class MainActivity : Activity() {
         lib = l
         if (testStream == null && prefs.channelCount(prefs.source) != l.channels.size) { prefs.setChannelCount(l.channels.size); reopenSettings() }
         say("")
-        scope = l.list(scopeName, favs, recents).ifEmpty { scopeName = Library.ALL; l.list(Library.ALL, favs, recents) }
+        scope = listed(scopeName).ifEmpty { scopeName = Library.ALL; listed(Library.ALL) }
         if (player != null) startPlaying()
         page.refresh()
     }
@@ -272,7 +275,7 @@ class MainActivity : Activity() {
             else -> l.indexOf(w)
         }
         if (w != null && current == i && player?.playbackState == Player.STATE_READY) return
-        play(if (i in l.channels.indices) i else scope.firstOrNull() ?: 0)
+        play(if (i in l.channels.indices && !Plus.hides(l.channels[i])) i else scope.firstOrNull() ?: 0)
     }
 
     private fun onGuide() {
@@ -942,7 +945,7 @@ class MainActivity : Activity() {
         val l = lib ?: return
         val rows = (recents.take(10) + favs.filter { it !in recents.take(10) }).mapNotNull { k ->
             val i = l.indexOf(k)
-            if (i < 0) null else k + "\t" + l.channels[i].name.replace('\t', ' ') + "\t" + Repo.logo(i)
+            if (i < 0 || Plus.hides(l.channels[i])) null else k + "\t" + l.channels[i].name.replace('\t', ' ') + "\t" + Repo.logo(i)
         }
         prefs.homeRows = rows
         Home.publish(this, rows)
@@ -1014,6 +1017,45 @@ class MainActivity : Activity() {
         p.setMediaSource(src)
         p.prepare()
         p.playWhenReady = true
+    }
+
+    /** the channels of the list [id], without those that are not to be shown */
+    private fun listed(id: String): List<Int> {
+        val l = lib ?: return emptyList()
+        val all = l.list(id, favs, recents)
+        return if (Plus.PRESENT) all.filter { !Plus.hides(l.channels[it]) } else all
+    }
+
+    private val plusHost = object : PlusHost {
+        override val activity get() = this@MainActivity
+        override val ui get() = this@MainActivity.ui
+        override val prefs get() = this@MainActivity.prefs
+        override val root get() = this@MainActivity.root
+        override val main get() = this@MainActivity.main
+        override fun library() = lib
+        override fun current() = current
+        override fun watch(key: String) {
+            val l = lib ?: return
+            val i = l.indexOf(key)
+            if (i < 0 || Plus.hides(l.channels[i])) return
+            if (page.isOpen) page.close()
+            if (browsing) closeBrowse(false)
+            hideGuide(); closeOptions()
+            scopeName = Library.ALL; scope = listed(Library.ALL); prefs.scope = scopeName
+            play(i)
+        }
+        override fun say(text: String) { this@MainActivity.say(text); if (text.isNotEmpty()) main.postDelayed({ if (note.text == text) this@MainActivity.say("") }, 3500) }
+        override fun restyle() { resumeAt = page.place().takeIf { page.isOpen } ?: (-1 to -1); recreate() }
+        override fun refocus() { if (page.isOpen) { page.refresh(); page.focus() } else if (guideBox.visibility == View.VISIBLE) guideList.requestFocus() else if (browsing) groupList.requestFocus() }
+        override fun relist() {
+            val l = lib ?: return
+            scope = listed(scopeName).ifEmpty { scopeName = Library.ALL; listed(Library.ALL) }
+            if (browsing) { groupRows = groupsNow(); choose(shownName, false) }
+            if (page.isOpen) page.refresh()
+            publishHome()
+            // (the channel that plays is one that is no longer shown: the first that is)
+            if (current in l.channels.indices && Plus.hides(l.channels[current])) scope.firstOrNull()?.let { play(it) }
+        }
     }
 
     private fun zap(step: Int) {
@@ -1642,11 +1684,13 @@ class MainActivity : Activity() {
             h.name.text = name
             h.name.setTextColor(if (shownHere) accent else if (id == "search" || id == "settings" || id == "source") white(185) else white(235))
             h.name.typeface = Typeface.create(if (shownHere) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
-            h.count.text = groupCounts[id]?.let { String.format(Locale.US, "%,d", it) } ?: ""
+            h.count.text = Plus.groupNote(id) ?: groupCounts[id]?.let { String.format(Locale.US, "%,d", it) } ?: ""
             return row
         }
     }
 
+    /** one line a channel in the list (an extra) */
+    private val compact by lazy { Plus.compact(prefs) }
     private class ChanRow(val num: TextView, val logo: ImageView, val name: TextView, val now: TextView, val bar: View, val star: TextView)
 
     private val chanAdapter = object : BaseAdapter() {
@@ -1663,7 +1707,8 @@ class MainActivity : Activity() {
                     background = ui.rounded(white(14), u(9))
                     setPadding(u(4), u(4), u(4), u(4))
                 }
-                addView(logo, LinearLayout.LayoutParams(u(40), u(40)))
+                if (compact) setPadding(u(9), u(3.5f), u(12), u(3.5f))
+                addView(logo, if (compact) LinearLayout.LayoutParams(u(27), u(27)) else LinearLayout.LayoutParams(u(40), u(40)))
                 val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
                 val name = ui.label(13.5f, Color.WHITE, true)
                 val now = ui.label(10.5f, white(140))
@@ -1695,6 +1740,7 @@ class MainActivity : Activity() {
             h.bar.visibility = if (cur != null) View.VISIBLE else View.GONE
             h.star.text = if (l.keyOf(i) in favs) "\u2605" else ""
             Images.show(Repo.logo(i), h.logo, u(40))
+            if (compact) { h.now.visibility = View.GONE; h.bar.visibility = View.GONE }
             return row
         }
     }
@@ -1794,9 +1840,10 @@ class MainActivity : Activity() {
                 "search" -> askSearch()
                 "settings" -> openSettings()
                 "source" -> sourceSheet { if (browsing) groupList.requestFocus() }
-                else -> { choose(id, false); if (shown.isNotEmpty()) chanList.requestFocus() }
+                else -> if (!Plus.groupClick(id)) { choose(id, false); if (shown.isNotEmpty()) chanList.requestFocus() }
             }
         }
+        groupList.setOnItemLongClickListener { _, _, p, _ -> Plus.groupHeld(groupRows[p].first, groupRows[p].second) }
         groupList.setOnKeyListener { _, k, ev ->
             when (k) {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { if (ev.action == KeyEvent.ACTION_DOWN && shown.isNotEmpty()) chanList.requestFocus(); true }
@@ -1858,7 +1905,7 @@ class MainActivity : Activity() {
             if (l.groups.isNotEmpty()) out += "#groups" to "GROUPS"
             // (shown with a capital, whatever the playlist writes)
             for (g in l.groups) out += g to g.replaceFirstChar { it.titlecase() }
-            for ((id, _) in out) if (!id.startsWith("#") && id != "search" && id != "source") counts[id] = l.list(id, favs, recents).size
+            for ((id, _) in out) if (!id.startsWith("#") && id != "search" && id != "source") counts[id] = listed(id).size
         }
         out += "#app" to "APP"
         out += "settings" to "Settings"
@@ -1879,7 +1926,7 @@ class MainActivity : Activity() {
             }
         } else {
             shownName = id
-            shown = l.list(id, favs, recents)
+            shown = listed(id)
             chanHint.text = when {
                 shown.isNotEmpty() -> ""
                 id == Library.FAVS -> "No favourites yet.\nHold OK on a channel to make it one."
@@ -1914,7 +1961,7 @@ class MainActivity : Activity() {
         miniTag.text = "WATCHING   " + (current + 1) + "  " + l.channels[current.coerceIn(0, l.channels.size - 1)].name
         clockTick.run()
         placeSurface()
-        val name = if (groupRows.any { it.first == scopeName } && current in l.list(scopeName, favs, recents)) scopeName else Library.ALL
+        val name = if (groupRows.any { it.first == scopeName } && current in listed(scopeName)) scopeName else Library.ALL
         choose(name, true)
         groupList.setSelection(groupRows.indexOfFirst { it.first == name }.coerceAtLeast(0))
         fillDetails(current)
@@ -2021,6 +2068,8 @@ class MainActivity : Activity() {
     private var progs: List<Guide.Prog> = emptyList()
     /** the channel whose programmes are listed is recorded: those of the days before are listed too and can be played */
     private var guideRec = false
+    /** the channel whose programmes are listed */
+    private var guideOf = -1
 
     private val guideAdapter = object : BaseAdapter() {
         override fun getCount() = progs.size
@@ -2041,7 +2090,7 @@ class MainActivity : Activity() {
             val on = g.start <= t && t < g.stop
             (row.getChildAt(0) as TextView).apply { text = dayHm(g.start); setTextColor(if (on) accent else white(150)) }
             val col = row.getChildAt(1) as LinearLayout
-            (col.getChildAt(0) as TextView).apply { text = g.title; setTextColor(if (on) accent else if (g.stop <= t) (if (guideRec) white(200) else white(110)) else Color.WHITE) }
+            (col.getChildAt(0) as TextView).apply { text = (lib?.channels?.getOrNull(guideOf)?.let { Plus.programmeMark(Library.keyOf(it), g) } ?: "") + g.title; setTextColor(if (on) accent else if (g.stop <= t) (if (guideRec) white(200) else white(110)) else Color.WHITE) }
             (col.getChildAt(1) as TextView).apply { text = g.desc; visibility = if (g.desc.isEmpty()) View.GONE else View.VISIBLE }
             return row
         }
@@ -2065,7 +2114,12 @@ class MainActivity : Activity() {
             val g = progs.getOrNull(p) ?: return@setOnItemClickListener
             val rule = lib?.channels?.getOrNull(current)?.rec
             val now = System.currentTimeMillis()
-            if (rule == null || !canShift() || g.start > now || g.start < now - rule.days * 86_400_000L + 120_000) return@setOnItemClickListener
+            if (g.start > now) {
+                val c = lib?.channels?.getOrNull(guideOf)
+                if (c != null && Plus.programme(Library.keyOf(c), c.name, g)) guideAdapter.notifyDataSetChanged()
+                return@setOnItemClickListener
+            }
+            if (rule == null || !canShift() || g.start < now - rule.days * 86_400_000L + 120_000) return@setOnItemClickListener
             hideGuide()
             play(current, at = g.start)
         }
@@ -2085,7 +2139,9 @@ class MainActivity : Activity() {
         main.removeCallbacks(hideInfo); infoBar.alpha = 0f
         val days = l.channels[i].rec?.days ?: 0
         guideRec = i == current && canShift() && days > 0
-        val name = l.channels[i].name.uppercase(Locale.getDefault()) + (if (guideRec) "\nOK PLAYS A PROGRAMME FROM ITS BEGINNING  \u00B7  $days DAYS BACK" else "")
+        guideOf = i
+        val name = l.channels[i].name.uppercase(Locale.getDefault()) + (if (guideRec) "\nOK PLAYS A PROGRAMME FROM ITS BEGINNING  \u00B7  $days DAYS BACK" else "") +
+            Plus.guideHint().let { if (it.isEmpty()) "" else "\n" + it }
         guideTitle.text = name
         guideBox.visibility = View.VISIBLE
         progs = emptyList(); guideAdapter.notifyDataSetChanged()
@@ -2304,6 +2360,11 @@ class MainActivity : Activity() {
     }
 
     private fun openSettings() {
+        if (Plus.settingsAsked { openSettingsNow() }) return
+        openSettingsNow()
+    }
+
+    private fun openSettingsNow() {
         if (browsing) closeBrowse(true)
         hideGuide()
         main.removeCallbacks(hideInfo); infoBar.alpha = 0f
@@ -2440,8 +2501,7 @@ class MainActivity : Activity() {
             ))
         )
         // (the extras' tab, where a build has them, stands before About)
-        // (a change of the app's colour draws the whole app anew: the settings then open again where they stood)
-        val extra = Plus.tab(this, ui, prefs, { resumeAt = page.place(); recreate() }, { if (page.isOpen) page.focus() })
+        val extra = Plus.tab()
         page.open(if (extra != null) tabs.dropLast(1) + extra + tabs.last() else tabs)
     }
 
@@ -2453,7 +2513,7 @@ class MainActivity : Activity() {
         val l = lib
         val i = if (l != null) Library.numbered(typed, l.channels.size) else -1
         typed = ""; digits.visibility = View.GONE
-        if (i >= 0 && l != null) { scopeName = Library.ALL; scope = l.list(Library.ALL, favs, recents); prefs.scope = scopeName; play(i) }
+        if (i >= 0 && l != null && !Plus.hides(l.channels[i])) { scopeName = Library.ALL; scope = listed(Library.ALL); prefs.scope = scopeName; play(i) }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
