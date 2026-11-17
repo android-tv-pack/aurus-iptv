@@ -88,4 +88,12 @@ class LoginsTest {
         assertEquals("http://stream.example/play/7?token=abc", p.address(list.channels[0].url))
         assertEquals(2, sitting)
     }
+
+    @Test fun textGoesIntoAWebAddressAndComesBackAsJavaDoesIt() {
+        for (t in listOf("plain", "a b&c=d/e?f", "\u043f\u0440\u0438\u0432\u0435\u0442 \u4e16\u754c", "100% + ~!*'()", "ffmpeg http://host/ch/1_.m3u8")) {
+            org.junit.Assert.assertEquals(java.net.URLEncoder.encode(t, "UTF-8"), app.hermes.channels.core.Web.enc(t))
+            org.junit.Assert.assertEquals(t, app.hermes.channels.core.Web.dec(java.net.URLEncoder.encode(t, "UTF-8")))
+        }
+        org.junit.Assert.assertEquals("50% off", app.hermes.channels.core.Web.dec("50% off"))
+    }
 }

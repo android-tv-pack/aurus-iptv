@@ -129,7 +129,7 @@ object Films {
             else -> { b.append('"')
                 for (c in v.toString()) when {
                     c == '"' -> b.append("\\\""); c == '\\' -> b.append("\\\\"); c == '\n' -> b.append("\\n"); c == '\r' -> b.append("\\r"); c == '\t' -> b.append("\\t")
-                    c < ' ' -> b.append("\\u%04x".format(c.code))
+                    c < ' ' -> b.append("\\u00").append("0123456789abcdef"[c.code shr 4]).append("0123456789abcdef"[c.code and 15])
                     else -> b.append(c)
                 }
                 b.append('"') }

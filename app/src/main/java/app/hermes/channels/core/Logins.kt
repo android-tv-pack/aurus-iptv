@@ -6,7 +6,7 @@ object Json {
     /** the value as text, whatever it was sent as ("7", 7, 7.0) */
     fun str(v: Any?): String = when (v) {
         null -> ""
-        is Double -> if (v == Math.floor(v) && !v.isInfinite()) v.toLong().toString() else v.toString()
+        is Double -> if (v == kotlin.math.floor(v) && !v.isInfinite()) v.toLong().toString() else v.toString()
         else -> v.toString()
     }
     @Suppress("UNCHECKED_CAST") fun obj(v: Any?): Map<String, Any?> = v as? Map<String, Any?> ?: emptyMap()
@@ -52,7 +52,7 @@ object Json {
     }
 }
 
-private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+private fun enc(s: String) = Web.enc(s)
 /** for a value between the quotes of a playlist's line, and its name */
 private fun plain(s: String) = s.replace('"', '\'').replace('\n', ' ').replace('\r', ' ').trim()
 
@@ -82,7 +82,7 @@ object Xtream {
 
     fun toM3u(link: String, info: String, categories: String, streams: String): String {
         val base = link.substringBefore("/player_api.php")
-        val q = link.substringAfter('?').split('&').associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
+        val q = link.substringAfter('?').split('&').associate { it.substringBefore('=') to Web.dec(it.substringAfter('=', "")) }
         val user = q["username"].orEmpty(); val pass = q["password"].orEmpty()
         // (as a list of pieces where the server offers that: the way the app plays best)
         val formats = try { Json.list(Json.obj(Json.obj(Json.parse(info))["user_info"])["allowed_output_formats"]).map { Json.str(it) } } catch (e: Exception) { emptyList() }
@@ -113,7 +113,7 @@ class Portal(val link: String, private val get: (String, Map<String, String>) ->
     private val address = link.removePrefix(MARK).substringBefore('#')
     private val mac = link.substringAfter('#', "")
     private var endpoint = ""
-    @Volatile private var token = ""
+    @kotlin.concurrent.Volatile private var token = ""
 
     private fun headers(): Map<String, String> {
         val h = LinkedHashMap<String, String>()
@@ -142,7 +142,7 @@ class Portal(val link: String, private val get: (String, Map<String, String>) ->
             } catch (e: Exception) { last = e }
         }
         token = ""
-        throw last ?: java.io.IOException("no portal")
+        throw last ?: Trouble("no portal")
     }
 
     /** the portal's channels as a playlist; each is played from an address of the form [SCHEME]… that [address] turns into a real one */
@@ -164,7 +164,7 @@ class Portal(val link: String, private val get: (String, Map<String, String>) ->
 
     /** the address the channel plays from right now */
     fun address(channel: String): String {
-        val cmd = java.net.URLDecoder.decode(channel.substringAfter("?cmd=", ""), "UTF-8")
+        val cmd = Web.dec(channel.substringAfter("?cmd=", ""))
         fun real(s: String) = s.trim().split(' ').last { it.isNotEmpty() }
         fun once(): String = real(Json.str(Json.obj(ask("type=itv&action=create_link&cmd=${enc(cmd)}&series=&forced_storage=undefined&disable_ad=0&download=0"))["cmd"]))
         if (token.isEmpty()) login()
@@ -175,7 +175,7 @@ class Portal(val link: String, private val get: (String, Map<String, String>) ->
         // (a portal that gives no address of its own: the one the channel is listed with, where it is a real one)
         val listed = real(cmd)
         if (listed.startsWith("http") && "localhost" !in listed) return listed
-        throw java.io.IOException("no address")
+        throw Trouble("no address")
     }
 
     companion object {
@@ -194,5 +194,36 @@ class Portal(val link: String, private val get: (String, Map<String, String>) ->
             return MARK + s.substringBefore('#') + "#" + mac
         }
         fun isLogin(link: String) = link.startsWith(MARK)
+    }
+}
+
+/** something a server did not give (plain Kotlin: no Java classes here) */
+class Trouble(message: String) : Exception(message)
+
+/** Text as it goes into a web address and comes out of one (UTF-8, as web forms do it: a space is a plus). */
+object Web {
+    private const val SAFE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.*"
+    fun enc(s: String): String {
+        val b = StringBuilder()
+        for (x in s.encodeToByteArray()) {
+            val c = x.toInt() and 255
+            when {
+                c < 128 && c.toChar() in SAFE -> b.append(c.toChar())
+                c == 32 -> b.append('+')
+                else -> { b.append('%'); b.append("0123456789ABCDEF"[c shr 4]); b.append("0123456789ABCDEF"[c and 15]) }
+            }
+        }
+        return b.toString()
+    }
+    fun dec(s: String): String {
+        val out = ArrayList<Byte>(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '%' && i + 2 < s.length + 0 && s.substring(i + 1, i + 3).toIntOrNull(16) != null) { out.add(s.substring(i + 1, i + 3).toInt(16).toByte()); i += 3 }
+            else if (c == '+') { out.add(32); i++ }
+            else { for (x in c.toString().encodeToByteArray()) out.add(x); i++ }
+        }
+        return out.toByteArray().decodeToString()
     }
 }

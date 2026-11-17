@@ -76,8 +76,8 @@ object M3u {
         val bySid = HashMap<String, Channel>()
         val byName = HashMap<String, Channel>()
         for (c in other.channels) {
-            if (c.sid.isNotEmpty()) bySid.putIfAbsent(c.sid, c)
-            byName.putIfAbsent(norm(c.name), c)
+            if (c.sid.isNotEmpty() && c.sid !in bySid) bySid[c.sid] = c
+            norm(c.name).let { if (it !in byName) byName[it] = c }
         }
         for (c in own.channels) {
             if (c.logo.isNotEmpty() && c.tvgId.isNotEmpty()) continue

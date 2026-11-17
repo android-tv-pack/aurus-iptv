@@ -16,7 +16,7 @@ class Mp2 {
     private val sfInfo = Array(2) { IntArray(32) }
     private val scale = Array(2) { Array(32) { IntArray(3) } }
     private val sample = Array(2) { Array(32) { IntArray(3) } }
-    private val d = FloatArray(1024).also { System.arraycopy(WINDOW, 0, it, 0, 512); System.arraycopy(WINDOW, 0, it, 512, 512) }
+    private val d = FloatArray(1024).also { WINDOW.copyInto(it, 0, 0, 512); WINDOW.copyInto(it, 512, 0, 512) }
     private val v = Array(2) { FloatArray(1024) }
     private val u = FloatArray(32)
     private var vPos = 0
