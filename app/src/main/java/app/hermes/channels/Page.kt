@@ -148,7 +148,8 @@ class Page(private val ui: Ui, private val host: FrameLayout, private val title:
                     background = ui.rounded(ui.white(10), ui.u(11))
                 }
                 line.addView(ui.label(15.5f, ui.fg).apply { text = r.title }, LinearLayout.LayoutParams(0, -2, 1f))
-                val value = ui.label(14.5f, ui.white(200)).apply { gravity = Gravity.END }
+                // (a long value is shortened, never the setting's name: the card beside it shows the value in full)
+                val value = ui.label(14.5f, ui.white(200)).apply { gravity = Gravity.END; maxWidth = ui.u(170) }
                 line.addView(value, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = ui.u(12) })
                 rowViews += Triple(r, line, value)
                 line.setOnFocusChangeListener { v, has ->

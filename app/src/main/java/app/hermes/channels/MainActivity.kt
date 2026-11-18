@@ -2247,7 +2247,8 @@ class MainActivity : Activity() {
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
 
         groupList.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, p: Int, id: Long) { if (groupList.hasFocus() && !groupRows[p].first.startsWith("#")) choose(groupRows[p].first, false) }
+            // (the list already shown is not chosen again: the channels stay where they were when the lists come out)
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, p: Int, id: Long) { if (groupList.hasFocus() && !groupRows[p].first.startsWith("#") && groupRows[p].first != shownName) choose(groupRows[p].first, false) }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
         groupList.setOnItemClickListener { _, _, p, _ ->
@@ -2900,7 +2901,10 @@ class MainActivity : Activity() {
                 }, rows = listOf(
                     Page.Row("EPG of this playlist", "Where \u201C" + prefs.sourceName + "\u201D takes its programmes from", { epgName(prefs.epgOf(prefs.source)) }, { prefs.sources.isNotEmpty() }, steps = false) { epgPicker(prefs.source) }
                 ) + prefs.epgs.map { (id, name, link) ->
-                    Page.Row(name, Uri.parse(link).host ?: "Saved EPG", { if (prefs.epgOf(prefs.source) == id) "\u2713  In use" else "" }, steps = false) { epgSheet(id) }
+                    Page.Row(name, Uri.parse(link).host ?: "Saved EPG", { if (prefs.epgOf(prefs.source) == id) "\u2713  In use" else "" }, steps = false,
+                        about = "OK: use it for the playlist you watch, rename it, change its link, or remove it.",
+                        facts = { listOf("FROM" to (Uri.parse(link).host ?: "\u2014"),
+                            "USED BY" to prefs.sources.filter { prefs.epgOf(it.first) == id }.joinToString(", ") { it.second }.ifEmpty { "No playlist" }) }) { epgSheet(id) }
                 } + listOf(
                     Page.Row("\uFF0B  Add an EPG", "A link in XMLTV form (.xml or .xml.gz)", { "" }, steps = false) { addEpg() },
                     Page.Row("Logos link", "Optional: a second list that gives this playlist's channels their logos and EPG names", { if (prefs.extra.isEmpty()) "None" else "Set" }, { prefs.sources.isNotEmpty() }, steps = false) {
@@ -3161,8 +3165,8 @@ class MainActivity : Activity() {
         const val GAP_RIGHT = 24
         const val MINI_W = 400
         const val MINI_X = SIDE_PAD + GROUPS_W + GAP + CHANS_W + GAP_RIGHT
-        const val CHANS_AWAY = 362
-        const val MINI_W_AWAY = 520
+        const val CHANS_AWAY = 392
+        const val MINI_W_AWAY = 488
         const val MINI_X_AWAY = 960 - SIDE_PAD - MINI_W_AWAY
         const val MINI_Y = 52
     }
