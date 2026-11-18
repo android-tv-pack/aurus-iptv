@@ -13,8 +13,8 @@ android {
         applicationId = "app.hermes.channels"
         minSdk = 24
         targetSdk = 34
-        versionCode = 33
-        versionName = "0.33-beta"
+        versionCode = 34
+        versionName = "0.34-beta"
         if (plus) ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
     buildTypes {
