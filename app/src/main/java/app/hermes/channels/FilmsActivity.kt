@@ -96,7 +96,7 @@ class FilmsActivity : Activity() {
         }, FrameLayout.LayoutParams(-1, -1))
 
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(ui.u(20), ui.u(24), ui.u(8), ui.u(14)) }
-        left.addView(ui.label(17f, Color.WHITE, true).apply { text = greeting() })
+        left.addView(ui.label(17f, ui.fg, true).apply { text = greeting() })
         left.addView(ui.label(11f, ui.white(140)).apply { text = "What shall we watch?" }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(2) })
         rail = ListView(this).apply {
             divider = null; selector = ui.rounded(ui.white(30), ui.u(10)); isVerticalScrollBarEnabled = false
@@ -111,7 +111,7 @@ class FilmsActivity : Activity() {
         // a few words about the film in focus
         shelfName = ui.caps("", ui.accent)
         right.addView(shelfName)
-        name = ui.label(22f, Color.WHITE, true)
+        name = ui.label(22f, ui.fg, true)
         right.addView(name, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(5) })
         facts = ui.label(11.5f, ui.white(200), true)
         right.addView(facts, LinearLayout.LayoutParams(-1, ui.u(17)).apply { topMargin = ui.u(3) })
@@ -223,9 +223,9 @@ class FilmsActivity : Activity() {
         override fun getItem(i: Int) = i
         override fun getItemId(i: Int) = i.toLong()
         override fun getView(i: Int, old: View?, parent: ViewGroup): View {
-            val v = (old as? TextView) ?: ui.label(13.5f, Color.WHITE).apply { setPadding(ui.u(12), ui.u(8.5f), ui.u(10), ui.u(9)) }
+            val v = (old as? TextView) ?: ui.label(13.5f, ui.fg).apply { setPadding(ui.u(12), ui.u(8.5f), ui.u(10), ui.u(9)) }
             v.text = offers[i].name
-            v.setTextColor(if (i == open) ui.accent else Color.WHITE)
+            v.setTextColor(if (i == open) ui.accent else ui.fg)
             return v
         }
     }
@@ -265,9 +265,9 @@ class FilmsActivity : Activity() {
             val views = ArrayList<TextView>()
             fun paint() { for ((i, v) in views.withIndex()) { val on2 = chosen[f] == i - 1
                 v.background = ui.rounded(if (v.isFocused) ui.accent else if (on2) ui.white(54) else ui.white(16), ui.u(13), if (on2 && !v.isFocused) ui.u(1) else 0, ui.accent)
-                v.setTextColor(if (v.isFocused) ui.ink else Color.WHITE) } }
+                v.setTextColor(if (v.isFocused) ui.ink else ui.fg) } }
             for (i in -1 until filter.choices.size) {
-                val v = ui.label(11.5f, Color.WHITE, true).apply {
+                val v = ui.label(11.5f, ui.fg, true).apply {
                     text = if (i < 0) "Any" else nice(filter.choices[i].first)
                     isFocusable = true; isClickable = true
                     setPadding(ui.u(11), ui.u(4.5f), ui.u(11), ui.u(5))
@@ -383,7 +383,7 @@ class FilmsActivity : Activity() {
                 val left = View(this@FilmsActivity).apply { background = ui.rounded(ui.accent, ui.u(2)) }
                 frame.addView(left, FrameLayout.LayoutParams(ui.u(40), ui.u(3), Gravity.BOTTOM or Gravity.START).apply { leftMargin = ui.u(6); bottomMargin = ui.u(6) })
                 box.addView(frame, LinearLayout.LayoutParams(-1, ui.u(POSTER_H)))
-                val name = ui.label(11f, Color.WHITE, true)
+                val name = ui.label(11f, ui.fg, true)
                 box.addView(name, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(5) })
                 val sub = ui.label(9.5f, ui.white(130))
                 box.addView(sub, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(1) })
@@ -450,7 +450,7 @@ class FilmsActivity : Activity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         row.addView(col, LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = ui.u(34) })
         col.addView(ui.caps(if (e.kind == Films.Kind.SERIES) "SERIES" else "FILM", ui.accent))
-        col.addView(ui.label(26f, Color.WHITE, true, lines = 2).apply { text = e.title }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(6) })
+        col.addView(ui.label(26f, ui.fg, true, lines = 2).apply { text = e.title }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(6) })
         val f = (full ?: e).facts().ifEmpty { e.facts() }
         if (f.isNotEmpty()) col.addView(ui.label(12.5f, ui.white(215), true).apply { text = f }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(7) })
         val words = e.about.ifEmpty { full?.about.orEmpty() }
@@ -469,7 +469,7 @@ class FilmsActivity : Activity() {
                     override fun getItem(i: Int) = full.parts[i]
                     override fun getItemId(i: Int) = i.toLong()
                     override fun getView(i: Int, old: View?, parent: ViewGroup): View {
-                        val v = (old as? TextView) ?: ui.label(13.5f, Color.WHITE).apply { setPadding(ui.u(12), ui.u(8.5f), ui.u(10), ui.u(9)) }
+                        val v = (old as? TextView) ?: ui.label(13.5f, ui.fg).apply { setPadding(ui.u(12), ui.u(8.5f), ui.u(10), ui.u(9)) }
                         val p = full.parts[i]
                         val at = prefs.filmAt(p.id)
                         v.text = p.title + (if (at > 0L) "      left at " + clock(at) else "")
@@ -490,11 +490,11 @@ class FilmsActivity : Activity() {
         val at = prefs.filmAt(e.id)
         var first: View? = null
         fun button(text: String, act: () -> Unit): TextView {
-            val v = ui.label(13.5f, Color.WHITE, true).apply {
+            val v = ui.label(13.5f, ui.fg, true).apply {
                 this.text = text
                 isFocusable = true; isClickable = true
                 setPadding(ui.u(18), ui.u(9), ui.u(18), ui.u(10))
-                fun paint(has: Boolean) { background = ui.rounded(if (has) ui.accent else ui.white(26), ui.u(18)); setTextColor(if (has) ui.ink else Color.WHITE) }
+                fun paint(has: Boolean) { background = ui.rounded(if (has) ui.accent else ui.white(26), ui.u(18)); setTextColor(if (has) ui.ink else ui.fg) }
                 paint(false)
                 setOnFocusChangeListener { _, has -> paint(has) }
                 setOnClickListener { act() }

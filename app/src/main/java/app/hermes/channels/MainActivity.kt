@@ -151,7 +151,7 @@ class MainActivity : Activity() {
             private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
             // (black behind the small picture: a channel that is not as wide as the window gets black bars, not the backdrop)
             override fun onDraw(c: Canvas) {
-                val x = u(MINI_X).toFloat(); val y = u(MINI_Y).toFloat(); val w = u(MINI_W).toFloat(); val h = (u(MINI_W) * 9 / 16).toFloat()
+                val x = u(miniX()).toFloat(); val y = u(MINI_Y).toFloat(); val w = u(miniW()).toFloat(); val h = (u(miniW()) * 9 / 16).toFloat()
                 c.drawRoundRect(x, y, x + w, y + h, u(14).toFloat(), u(14).toFloat(), p)
             }
         }.apply {
@@ -189,7 +189,7 @@ class MainActivity : Activity() {
         applyGlass()
         note = ui.label(15f, white(225), lines = 4).apply { gravity = Gravity.CENTER; setPadding(u(80), 0, u(80), 0) }
         root.addView(note, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
-        digits = ui.label(40f, Color.WHITE, true).apply { setShadowLayer(u(6).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
+        digits = ui.label(40f, ui.fg, true).apply { setShadowLayer(u(6).toFloat(), 0f, 0f, Color.BLACK); visibility = View.GONE }
         root.addView(digits, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { setMargins(0, u(44), u(44), 0) })
         page = Page(ui, root, "Settings", "Aurus IPTV " + BuildConfig.VERSION_NAME.removeSuffix("-beta") + (if (isBeta) "  \u00B7  BETA" else ""))
     }
@@ -1512,7 +1512,7 @@ class MainActivity : Activity() {
     private fun placeSurface() {
         val dm = resources.displayMetrics
         val boxX: Int; val boxY: Int; val boxW: Int; val boxH: Int
-        if (browsing) { boxX = u(MINI_X); boxY = u(MINI_Y); boxW = u(MINI_W); boxH = u(MINI_W) * 9 / 16 }
+        if (browsing) { boxX = u(miniX()); boxY = u(MINI_Y); boxW = u(miniW()); boxH = u(miniW()) * 9 / 16 }
         else { boxX = 0; boxY = 0; boxW = dm.widthPixels; boxH = dm.heightPixels }
         val mode = if (browsing) 0 else pictureMode
         val shape = when (mode) { 3 -> 16f / 9f; 4 -> 4f / 3f; else -> videoAspect }
@@ -1575,7 +1575,7 @@ class MainActivity : Activity() {
         infoLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
         infoBar.addView(infoLogo, LinearLayout.LayoutParams(u(58), u(58)))
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        infoName = ui.label(19f, Color.WHITE, true)
+        infoName = ui.label(19f, ui.fg, true)
         infoNow = ui.label(13.5f, white(235))
         col.addView(infoName)
         col.addView(infoNow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(2) })
@@ -1599,7 +1599,7 @@ class MainActivity : Activity() {
         col.addView(infoHint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
         chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
         for (i in 0..7) {
-            val t = ui.label(11.5f, Color.WHITE, true).apply {
+            val t = ui.label(11.5f, ui.fg, true).apply {
                 isFocusable = true
                 isClickable = true
                 setPadding(u(11), u(5.5f), u(11), u(6))
@@ -1986,6 +1986,20 @@ class MainActivity : Activity() {
     private lateinit var dDesc: TextView
     private lateinit var dLaterCaps: TextView
     private lateinit var dLater: TextView
+    private lateinit var dCatch: TextView
+    private lateinit var dAll: TextView
+    /** the card under the picture: what is on, then its description and what is next (or the next programmes); OK opens all of them */
+    private lateinit var nowCard: LinearLayout
+    private lateinit var groupsCard: View
+    private lateinit var browseHead: View
+    private lateinit var midCol: View
+    private lateinit var rightCol: View
+    private lateinit var miniFrame: View
+    private lateinit var aboutCol: View
+    /** the lists are out at the left (Left from the channels); otherwise they are put away and the picture is larger */
+    private var listsOut = false
+    /** the programmes were opened from the channel window's card: Back returns there */
+    private var guideFromList = false
     private var browsing = false
     /** the channel that was on when the window was opened: Back returns to it */
     private var before = -1
@@ -2037,9 +2051,9 @@ class MainActivity : Activity() {
                 setPadding(u(6), u(7), u(10), u(7.5f))
                 val mark = View(context).apply { background = ui.rounded(accent, u(2)) }
                 addView(mark, LinearLayout.LayoutParams(u(3), u(13)))
-                val n = ui.label(12.5f, Color.WHITE)
+                val n = ui.label(14f, ui.fg)
                 addView(n, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(7) })
-                val cnt = ui.label(9.5f, white(95))
+                val cnt = ui.label(11f, white(110))
                 addView(cnt, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(6) })
                 tag = GroupRow(mark, n, cnt)
             }
@@ -2067,25 +2081,25 @@ class MainActivity : Activity() {
             val row = old ?: LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(u(9), u(7), u(12), u(7))
+                setPadding(u(9), u(6.5f), u(12), u(6.5f))
                 val logo = ImageView(context).apply {
                     scaleType = ImageView.ScaleType.FIT_CENTER
-                    background = ui.rounded(white(14), u(9))
-                    setPadding(u(4), u(4), u(4), u(4))
+                    background = ui.rounded(white(14), u(7))
+                    setPadding(u(3), u(3), u(3), u(3))
                 }
-                if (compact) setPadding(u(9), u(3.5f), u(12), u(3.5f))
-                addView(logo, if (compact) LinearLayout.LayoutParams(u(27), u(27)) else LinearLayout.LayoutParams(u(40), u(40)))
+                if (compact) { setPadding(u(12), u(5.5f), u(12), u(5.5f)); logo.visibility = View.GONE }
+                addView(logo, LinearLayout.LayoutParams(u(30), u(30)))
                 val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-                val name = ui.label(13.5f, Color.WHITE, true)
+                val name = ui.label(15f, ui.fg)
                 val now = ui.label(10.5f, white(140))
                 val bar = Bar(context).apply { fill = white(150); track = white(26) }
                 col.addView(name)
                 col.addView(now, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(1) })
                 col.addView(bar, LinearLayout.LayoutParams(u(96), maxOf(2, u(2))).apply { topMargin = u(4.5f) })
-                addView(col, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(12) })
-                val side = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
+                addView(col, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = if (compact) 0 else u(12) })
+                val side = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
                 val star = ui.label(11f, accent)
-                val num = ui.label(9.5f, white(95))
+                val num = ui.label(11f, white(110))
                 side.addView(star); side.addView(num)
                 addView(side, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(8) })
                 tag = ChanRow(num, logo, name, now, bar, star)
@@ -2097,16 +2111,13 @@ class MainActivity : Activity() {
             h.num.text = (i + 1).toString()
             h.name.text = c.name
             // the channel that was on when the window was opened stays marked
-            h.name.setTextColor(if (i == before) accent else Color.WHITE)
-            val t = System.currentTimeMillis()
-            val cur = Repo.nowNext(i, t).first
-            // (without a guide: the channel's group, where the list shown is not that group itself)
-            h.now.text = cur?.title ?: if (shownName == c.group) "" else c.group.replaceFirstChar { it.titlecase() }
-            (h.bar as Bar).f = if (cur != null) Guide.progress(cur, t) else -1f
-            h.bar.visibility = if (cur != null) View.VISIBLE else View.GONE
+            h.name.setTextColor(if (i == before) accent else ui.fg)
+            // (what is on is told on the card beside the picture: the row is the channel's logo and name)
+            h.now.visibility = View.GONE; h.bar.visibility = View.GONE
             h.star.text = if (l.keyOf(i) in favs) "\u2605" else ""
-            Images.show(Repo.logo(i), h.logo, u(40))
-            if (compact) { h.now.visibility = View.GONE; h.bar.visibility = View.GONE }
+            // (a star only where there is one: the number then stands level with the name)
+            h.star.visibility = if (h.star.text.isEmpty()) View.GONE else View.VISIBLE
+            if (!compact) Images.show(Repo.logo(i), h.logo, u(30))
             return row
         }
     }
@@ -2115,12 +2126,13 @@ class MainActivity : Activity() {
         val page = FrameLayout(this).apply { visibility = View.GONE }
         // across the top: what this is, which list is shown, the time
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
-        head.addView(ui.label(21f, Color.WHITE).apply { text = "Channels"; typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) })
+        head.addView(ui.label(21f, ui.fg).apply { text = "Channels"; typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) })
         headList = ui.caps("", accent)
         head.addView(headList, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(16); bottomMargin = u(4) })
         headClock = ui.label(17f, white(215)).apply { typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) }
         head.addView(headClock)
         page.addView(head, FrameLayout.LayoutParams(-1, u(MINI_Y - 12)).apply { leftMargin = u(SIDE_PAD + 8); rightMargin = u(SIDE_PAD) })
+        browseHead = head
 
         browse = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         groupList = list().apply { adapter = groupAdapter }
@@ -2129,16 +2141,19 @@ class MainActivity : Activity() {
         val card = FrameLayout(this).apply { background = ui.rounded(white(9), u(14), 1, white(16)); setPadding(u(4), 0, u(4), 0) }
         card.addView(groupList, FrameLayout.LayoutParams(-1, -1))
         browse.addView(card, LinearLayout.LayoutParams(u(GROUPS_W), -1))
+        groupsCard = card
         val mid = FrameLayout(this)
         mid.addView(chanList, FrameLayout.LayoutParams(-1, -1))
-        chanHint = ui.label(12.5f, white(165), lines = 6).apply { setPadding(u(18), u(26), u(18), 0); setLineSpacing(u(3).toFloat(), 1f) }
+        chanHint = ui.label(13f, white(165), lines = 6).apply { setPadding(u(18), u(26), u(18), 0); setLineSpacing(u(3).toFloat(), 1f) }
         mid.addView(chanHint, FrameLayout.LayoutParams(-1, -2))
         browse.addView(mid, LinearLayout.LayoutParams(u(CHANS_W), -1).apply { leftMargin = u(GAP) })
+        midCol = mid
 
         // the right side: the picture's window is left free (a thin frame is drawn round it), what the channel shows is told below it
         val miniH = u(MINI_W) * 9 / 16
         val right = FrameLayout(this)
-        right.addView(object : View(this) {
+        rightCol = right
+        miniFrame = object : View(this) {
             private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = maxOf(1.5f, u(1).toFloat()); color = white(42) }
             private val corner = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(10, 13, 26) }
             private val path = android.graphics.Path()
@@ -2152,48 +2167,82 @@ class MainActivity : Activity() {
                 val in2 = edge.strokeWidth / 2
                 c.drawRoundRect(in2, in2, w - in2, h - in2, r, r, edge)
             }
-        }, FrameLayout.LayoutParams(-1, miniH))
+        }
+        right.addView(miniFrame, FrameLayout.LayoutParams(-1, miniH))
         // which channel the small window shows, when that is not the one the focus is on
-        miniTag = ui.label(9.5f, Color.WHITE, true).apply {
+        miniTag = ui.label(9.5f, ui.fg, true).apply {
             letterSpacing = 0.06f
             background = ui.rounded(Color.argb(170, 6, 9, 18), u(9))
             setPadding(u(9), u(3.5f), u(9), u(4))
         }
         right.addView(miniTag, FrameLayout.LayoutParams(-2, -2).apply { leftMargin = u(10); topMargin = miniH - u(30); rightMargin = u(10) })
         val about = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        dLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; background = ui.rounded(white(14), u(8)); setPadding(u(3), u(3), u(3), u(3)) }
-        top.addView(dLogo, LinearLayout.LayoutParams(u(30), u(30)))
-        dName = ui.label(15.5f, Color.WHITE, true)
-        top.addView(dName, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(10) })
-        dNum = ui.label(10.5f, white(105))
-        top.addView(dNum, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(8) })
+        aboutCol = about
+        // the channel: logo, name, how far back it is recorded, its number
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(u(2), 0, u(4), 0) }
+        dLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; background = ui.rounded(white(14), u(6)); setPadding(u(2), u(2), u(2), u(2)) }
+        top.addView(dLogo, LinearLayout.LayoutParams(u(22), u(22)))
+        dName = ui.label(15f, ui.fg)
+        top.addView(dName, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = u(9) })
+        dCatch = ui.caps("", accent)
+        top.addView(dCatch, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(8) })
+        dNum = ui.label(11f, white(110))
+        top.addView(dNum, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(10) })
         about.addView(top)
-        dNow = ui.label(13.5f, accent, true, lines = 2)
-        about.addView(dNow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(9) })
+        // the card: what is on now; OK on it opens the programmes, before and after
+        nowCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            isFocusable = true; isClickable = true
+            setPadding(u(14), u(10), u(14), u(11))
+            background = ui.rounded(white(10), u(14))
+        }
+        val title = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        dNow = ui.label(15f, accent, true)
+        title.addView(dNow, LinearLayout.LayoutParams(0, -2, 1f))
+        dAll = ui.label(11f, white(130)).apply { text = "All programmes \u203A" }
+        title.addView(dAll, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(10) })
+        nowCard.addView(title)
         dTimes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        dStart = ui.label(10.5f, white(165))
+        dStart = ui.label(11f, white(165))
         dBar = Bar(this)
-        dStop = ui.label(10.5f, white(165))
-        dLeft = ui.label(10.5f, accent, true)
+        dStop = ui.label(11f, white(165))
+        dLeft = ui.label(11f, accent, true)
         dTimes.addView(dStart)
         dTimes.addView(dBar, LinearLayout.LayoutParams(0, maxOf(3, u(2.5f)), 1f).apply { leftMargin = u(8); rightMargin = u(8) })
         dTimes.addView(dStop)
         dTimes.addView(dLeft, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = u(12) })
-        about.addView(dTimes, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
-        dDesc = ui.label(11f, white(190), lines = 3).apply { setLineSpacing(u(2.5f).toFloat(), 1f) }
-        about.addView(dDesc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(8) })
-        dLaterCaps = ui.caps("LATER", white(105))
-        about.addView(dLaterCaps, LinearLayout.LayoutParams(-2, -2).apply { topMargin = u(10) })
-        dLater = ui.label(11f, white(205), lines = 3).apply { setLineSpacing(u(3).toFloat(), 1f) }
-        about.addView(dLater, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(3) })
-        right.addView(about, FrameLayout.LayoutParams(-1, -2).apply { topMargin = miniH + u(13) })
+        nowCard.addView(dTimes, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(5) })
+        dDesc = ui.label(12f, white(200), lines = 3).apply { setLineSpacing(u(2.5f).toFloat(), 1f) }
+        nowCard.addView(dDesc, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
+        val next = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        dLaterCaps = ui.caps("NEXT", white(120))
+        next.addView(dLaterCaps, LinearLayout.LayoutParams(u(46), -2).apply { topMargin = u(2) })
+        dLater = ui.label(12f, white(205), lines = 4).apply { setLineSpacing(u(2.5f).toFloat(), 1f) }
+        next.addView(dLater, LinearLayout.LayoutParams(0, -2, 1f))
+        nowCard.addView(next, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
+        about.addView(nowCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = u(7) })
+        right.addView(about, FrameLayout.LayoutParams(-1, -2).apply { topMargin = miniH + u(10) })
         browse.addView(right, LinearLayout.LayoutParams(u(MINI_W), -1).apply { leftMargin = u(GAP_RIGHT) })
-        page.addView(browse, FrameLayout.LayoutParams(-1, -1).apply { leftMargin = u(SIDE_PAD); topMargin = u(MINI_Y); bottomMargin = u(30) })
+        page.addView(browse, FrameLayout.LayoutParams(-1, -1).apply { leftMargin = u(SIDE_PAD); topMargin = u(MINI_Y); bottomMargin = u(16) })
 
-        // along the bottom: what the keys do here
-        page.addView(ui.label(9.5f, white(100)).apply { text = "OK  watch        HOLD OK  favourite        \u25C0 \u25B6  lists and channels        BACK  close"; letterSpacing = 0.04f },
-            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { leftMargin = u(SIDE_PAD + GROUPS_W + GAP + 12); bottomMargin = u(10) })
+        nowCard.setOnFocusChangeListener { v, has ->
+            v.background = if (has) ui.rounded(white(28), u(14), maxOf(2, u(1.5f)), accent) else ui.rounded(white(10), u(14))
+            dAll.setTextColor(if (has) ui.fg else white(130))
+        }
+        nowCard.setOnClickListener {
+            if (detailsFor < 0) return@setOnClickListener
+            guideFromList = true
+            // (the programmes lie where the channels were; the picture stays in view beside them)
+            midCol.visibility = View.INVISIBLE; browseHead.visibility = View.INVISIBLE
+            showGuide(detailsFor)
+        }
+        nowCard.setOnKeyListener { _, k, ev ->
+            when (k) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) chanList.requestFocus(); true }
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> true
+                else -> false
+            }
+        }
         browsePage = page
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
 
@@ -2206,13 +2255,13 @@ class MainActivity : Activity() {
                 "search" -> askSearch()
                 "settings" -> openSettings()
                 "source" -> sourceSheet { if (browsing) groupList.requestFocus() }
-                else -> if (!Plus.groupClick(id)) { choose(id, false); if (shown.isNotEmpty()) chanList.requestFocus() }
+                else -> if (!Plus.groupClick(id)) { choose(id, false); if (shown.isNotEmpty()) putListsAway() }
             }
         }
         groupList.setOnItemLongClickListener { _, _, p, _ -> Plus.groupHeld(groupRows[p].first, groupRows[p].second) }
         groupList.setOnKeyListener { _, k, ev ->
             when (k) {
-                KeyEvent.KEYCODE_DPAD_RIGHT -> { if (ev.action == KeyEvent.ACTION_DOWN && shown.isNotEmpty()) chanList.requestFocus(); true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { if (ev.action == KeyEvent.ACTION_DOWN && shown.isNotEmpty()) putListsAway(); true }
                 KeyEvent.KEYCODE_DPAD_LEFT -> true
                 else -> false
             }
@@ -2226,6 +2275,8 @@ class MainActivity : Activity() {
             val lv = v as ListView
             lv.selector = if (has) ui.rounded(white(30), u(12), maxOf(2, u(1.5f)), accent) else ui.rounded(Color.TRANSPARENT, 0)
             lv.invalidateViews()
+            // (the channels have the remote: the lists are put away, however the focus came here)
+            if (has && listsOut) putListsAway(false)
             if (has) shown.getOrNull(lv.selectedItemPosition)?.let { look(it) }
         }
         chanList.setOnItemClickListener { _, _, p, _ ->
@@ -2246,12 +2297,42 @@ class MainActivity : Activity() {
         }
         chanList.setOnKeyListener { _, k, ev ->
             when (k) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) groupList.requestFocus(); true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> true
+                KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) revealLists(); true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { if (ev.action == KeyEvent.ACTION_DOWN && detailsFor >= 0) nowCard.requestFocus(); true }
                 else -> false
             }
         }
     }
+
+    /** the lists come out at the left; the remote goes to the list that is shown */
+    private fun revealLists() {
+        if (!listsOut) { listsOut = true; layoutBrowse() }
+        groupList.setSelection(groupRows.indexOfFirst { it.first == shownName }.coerceAtLeast(0))
+        groupList.requestFocus()
+    }
+
+    /** the lists are put away: the channels and a larger picture; [focus]: the remote goes to the channels */
+    private fun putListsAway(focus: Boolean = true) {
+        if (listsOut) { listsOut = false; layoutBrowse() }
+        if (focus && shown.isNotEmpty()) chanList.requestFocus()
+    }
+
+    /** the channel window's columns and the picture, for the lists out or put away */
+    private fun layoutBrowse() {
+        groupsCard.visibility = if (listsOut) View.VISIBLE else View.GONE
+        (midCol.layoutParams as LinearLayout.LayoutParams).apply { width = u(if (listsOut) CHANS_W else CHANS_AWAY); leftMargin = if (listsOut) u(GAP) else 0 }
+        val w = u(miniW()); val h = w * 9 / 16
+        (rightCol.layoutParams as LinearLayout.LayoutParams).apply { width = w; leftMargin = u(miniX()) - u(SIDE_PAD) - u(if (listsOut) GROUPS_W + GAP + CHANS_W else CHANS_AWAY) }
+        miniFrame.layoutParams.height = h
+        (miniTag.layoutParams as FrameLayout.LayoutParams).topMargin = h - u(30)
+        (aboutCol.layoutParams as FrameLayout.LayoutParams).topMargin = h + u(10)
+        browse.requestLayout()
+        backdrop.invalidate()
+        placeSurface()
+    }
+
+    private fun miniX() = if (listsOut) MINI_X else MINI_X_AWAY
+    private fun miniW() = if (listsOut) MINI_W else MINI_W_AWAY
 
     /** the whole channel window (heading, lists, what the keys do) */
     private lateinit var browsePage: View
@@ -2326,9 +2407,11 @@ class MainActivity : Activity() {
         miniTag.visibility = if (prefs.previewFocus) View.GONE else View.VISIBLE
         miniTag.text = "WATCHING   " + (current + 1) + "  " + l.channels[current.coerceIn(0, l.channels.size - 1)].name
         clockTick.run()
-        placeSurface()
         val name = if (groupRows.any { it.first == scopeName } && current in listed(scopeName)) scopeName else Library.ALL
         choose(name, true)
+        // (the lists are put away, unless the list shown is empty)
+        listsOut = shown.isEmpty()
+        layoutBrowse()
         groupList.setSelection(groupRows.indexOfFirst { it.first == name }.coerceAtLeast(0))
         fillDetails(current)
         if (shown.isNotEmpty()) chanList.requestFocus() else groupList.requestFocus()
@@ -2337,6 +2420,7 @@ class MainActivity : Activity() {
     /** [back]: the channel that was on before comes back */
     private fun closeBrowse(back: Boolean) {
         if (!browsing) return
+        if (guideFromList) { guideFromList = false; guideBox.visibility = View.GONE; midCol.visibility = View.VISIBLE; browseHead.visibility = View.VISIBLE }
         browsing = false
         main.removeCallbacks(lookLater)
         browsePage.visibility = View.GONE
@@ -2394,10 +2478,12 @@ class MainActivity : Activity() {
         headClock.text = hm(t)
         dName.text = c.name
         dNum.text = (i + 1).toString()
-        Images.show(Repo.logo(i), dLogo, u(30))
+        val days = c.rec?.days ?: 0
+        dCatch.text = if (days > 0 && prefs.archive) "CATCH-UP \u00B7 $days DAYS" else ""
+        Images.show(Repo.logo(i), dLogo, u(22))
         val (cur, next) = Repo.nowNext(i, t)
         dNow.text = cur?.title ?: "No programme guide for this channel"
-        dNow.setTextColor(if (cur != null) accent else white(140))
+        dNow.setTextColor(if (cur != null) accent else white(150))
         dTimes.visibility = if (cur != null) View.VISIBLE else View.GONE
         if (cur != null) {
             dStart.text = hm(cur.start); dStop.text = hm(cur.stop)
@@ -2418,7 +2504,8 @@ class MainActivity : Activity() {
                     val on = all.firstOrNull { it.start <= now && now < it.stop }
                     dDesc.text = on?.desc.orEmpty()
                     dDesc.visibility = if (dDesc.text.isEmpty()) View.GONE else View.VISIBLE
-                    val later = all.filter { it.start >= (on?.stop ?: now) }.take(3)
+                    // (with a description: what comes next; without one, as with a guide of titles only, the next four)
+                    val later = all.filter { it.start >= (on?.stop ?: now) }.take(if (dDesc.text.isEmpty()) 4 else 1)
                     dLater.text = laterLines(later)
                     dLaterCaps.visibility = if (later.isNotEmpty()) View.VISIBLE else View.INVISIBLE
                 }
@@ -2447,7 +2534,7 @@ class MainActivity : Activity() {
                 setPadding(u(10), u(6), u(10), u(6))
                 addView(ui.label(11.5f, white(150)), LinearLayout.LayoutParams(u(70), -2))
                 val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-                col.addView(ui.label(12.5f, Color.WHITE, lines = 2))
+                col.addView(ui.label(12.5f, ui.fg, lines = 2))
                 col.addView(ui.label(10.5f, white(150), lines = 3).apply { setLineSpacing(u(2).toFloat(), 1f) })
                 addView(col, LinearLayout.LayoutParams(0, -2, 1f))
             }
@@ -2456,7 +2543,7 @@ class MainActivity : Activity() {
             val on = g.start <= t && t < g.stop
             (row.getChildAt(0) as TextView).apply { text = dayHm(g.start); setTextColor(if (on) accent else white(150)) }
             val col = row.getChildAt(1) as LinearLayout
-            (col.getChildAt(0) as TextView).apply { text = (lib?.channels?.getOrNull(guideOf)?.let { Plus.programmeMark(Library.keyOf(it), g) } ?: "") + g.title; setTextColor(if (on) accent else if (g.stop <= t) (if (guideRec) white(200) else white(110)) else Color.WHITE) }
+            (col.getChildAt(0) as TextView).apply { text = (lib?.channels?.getOrNull(guideOf)?.let { Plus.programmeMark(Library.keyOf(it), g) } ?: "") + g.title; setTextColor(if (on) accent else if (g.stop <= t) (if (guideRec) white(200) else white(110)) else ui.fg) }
             (col.getChildAt(1) as TextView).apply { text = g.desc; visibility = if (g.desc.isEmpty()) View.GONE else View.VISIBLE }
             return row
         }
@@ -2486,6 +2573,7 @@ class MainActivity : Activity() {
                 return@setOnItemClickListener
             }
             if (rule == null || !canShift() || g.start < now - rule.days * 86_400_000L + 120_000) return@setOnItemClickListener
+            if (browsing) closeBrowse(false)
             hideGuide()
             play(current, at = g.start)
         }
@@ -2498,7 +2586,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun hideGuide() { guideBox.visibility = View.GONE; progs = emptyList(); guideAdapter.notifyDataSetChanged() }
+    private fun hideGuide() {
+        guideBox.visibility = View.GONE; progs = emptyList(); guideAdapter.notifyDataSetChanged()
+        // (opened from the channel window's card: back there, on the same channel)
+        if (guideFromList) {
+            guideFromList = false
+            midCol.visibility = View.VISIBLE; browseHead.visibility = View.VISIBLE
+            if (browsing) chanList.requestFocus()
+        }
+    }
 
     private fun showGuide(i: Int) {
         val l = lib ?: return
@@ -2785,7 +2881,10 @@ class MainActivity : Activity() {
                         "RECORDED" to (if (l == null) "\u2014" else if (Repo.recCount == 0) "None, the playlist names no recordings" else num(Repo.recCount) + " channels, up to " + Repo.recDays + " days back"),
                         "LAST FETCHED" to stamp(Repo.listTime(this)))
                 }, rows = prefs.sources.map { (id, name) ->
-                    Page.Row(name, prefs.channelCount(id).let { if (it > 0) num(it) + " channels" else "Not read yet" }, { if (id == prefs.source) "\u2713  Watching" else "" }, steps = false) { playlistSheet(id) }
+                    Page.Row(name, prefs.channelCount(id).let { if (it > 0) num(it) + " channels" else "Not read yet" }, { if (id == prefs.source) "\u2713  Watching" else "" }, steps = false,
+                        about = "OK: watch this playlist, rename it, change its link, fetch it again, choose its EPG, or remove it.",
+                        facts = { listOf("CHANNELS" to prefs.channelCount(id).let { if (it > 0) num(it) else "Not read yet" }, "EPG" to epgName(prefs.epgOf(id)),
+                            "WATCHING" to if (id == prefs.source) "Now" else "No") }) { playlistSheet(id) }
                 } + Page.Row("\uFF0B  Add a playlist", if (prefs.sources.isEmpty()) "Give the link of your playlist to start" else "Another provider's link, or a list of your own", { "" }, steps = false) { addSource() }
                     + Page.Row("Films and series", "A library of films that some providers offer beside their channels", { if (prefs.films.isEmpty()) "Add a link" else "Open" }, steps = false) { filmsSheet() }
             ),
@@ -2874,6 +2973,10 @@ class MainActivity : Activity() {
             )),
             Page.Tab("Interface", "How the app looks while you watch. The sleep timer is not here: hold OK while watching, it is the last choice in the bar.",
                 rows = listOf(
+                Page.Row("Text colour", "Soft white, warm, or bright", { Ui.TONES[prefs.textTone.coerceIn(0, Ui.TONES.size - 1)].first }) { d ->
+                    prefs.textTone = (prefs.textTone + (if (d == 0) 1 else d) + Ui.TONES.size) % Ui.TONES.size
+                    restyle()
+                },
                 Page.Row("Clock on screen", "A small clock stays in the top right corner", { if (prefs.clock) "On" else "Off" }) {
                     prefs.clock = !prefs.clock
                     clockTick.run()
@@ -2887,7 +2990,7 @@ class MainActivity : Activity() {
                 Page.Row("While a channel changes", "Until the new picture comes: the last one stays, black, or a soft fade", { arrayOf("Last picture", "Black screen", "Fade")[prefs.changeLook] }) { d ->
                     prefs.changeLook = (prefs.changeLook + (if (d == 0) 1 else d) + 3) % 3
                 },
-                Page.Row("Small window in the channel list", "What plays there while you move through the channels", { if (prefs.previewFocus) "The channel in focus" else "The channel you watch" }) {
+                Page.Row("Preview while you scroll", "What plays beside the list while you move through the channels", { if (prefs.previewFocus) "Channel in focus" else "Your channel" }) {
                     prefs.previewFocus = !prefs.previewFocus
                 },
                 Page.Row("See-through bars", "How much of the picture shows through the bar and the programme list", { "${prefs.glass} %" }) { d ->
@@ -2972,8 +3075,13 @@ class MainActivity : Activity() {
             }
             return super.onKeyDown(keyCode, event)
         }
+        if (browsing && guideBox.visibility == View.VISIBLE) {
+            if (keyCode == KeyEvent.KEYCODE_BACK) { hideGuide(); return true }
+            return super.onKeyDown(keyCode, event)
+        }
         if (browsing) {
-            if (keyCode == KeyEvent.KEYCODE_BACK) { closeBrowse(true); return true }
+            // (Back puts the lists away first, then closes the window)
+            if (keyCode == KeyEvent.KEYCODE_BACK) { if (listsOut && shown.isNotEmpty()) putListsAway() else closeBrowse(true); return true }
             if (keyCode == KeyEvent.KEYCODE_MENU) { openSettings(); return true }
             return super.onKeyDown(keyCode, event)
         }
@@ -3045,13 +3153,17 @@ class MainActivity : Activity() {
         /** the picture's sizes, in the order OK steps through them */
         val PICTURE = arrayOf("As sent", "Fill the screen", "Stretch", "16:9", "4:3")
         // the channel window, in screen units (the screen is 960 wide): lists, channels, then the picture's small window
+        // (lists out: lists, channels, picture; lists put away: channels and a larger picture)
         const val SIDE_PAD = 26
-        const val GROUPS_W = 156
+        const val GROUPS_W = 190
         const val GAP = 10
-        const val CHANS_W = 318
+        const val CHANS_W = 284
         const val GAP_RIGHT = 24
         const val MINI_W = 400
         const val MINI_X = SIDE_PAD + GROUPS_W + GAP + CHANS_W + GAP_RIGHT
+        const val CHANS_AWAY = 362
+        const val MINI_W_AWAY = 520
+        const val MINI_X_AWAY = 960 - SIDE_PAD - MINI_W_AWAY
         const val MINI_Y = 52
     }
 }

@@ -93,7 +93,7 @@ class FilmPlayActivity : Activity() {
             setPadding(ui.u(40), ui.u(60), ui.u(40), ui.u(26))
         }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
-        heading = ui.label(17f, Color.WHITE, true)
+        heading = ui.label(17f, ui.fg, true)
         top.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
         state = ui.label(12f, ui.accent, true)
         top.addView(state, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ui.u(14) })
@@ -105,7 +105,7 @@ class FilmPlayActivity : Activity() {
         bar.addView(ui.label(10f, ui.white(120)).apply { text = "OK  pause      \u25C0 \u25B6  10 seconds      \u25B2 \u25BC  5 minutes      MENU  sound, subtitles      BACK  leave" }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(9) })
         root.addView(bar, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
-        note = ui.label(14f, Color.WHITE, lines = 3).apply { gravity = Gravity.CENTER }
+        note = ui.label(14f, ui.fg, lines = 3).apply { gravity = Gravity.CENTER }
         root.addView(note, FrameLayout.LayoutParams(ui.u(460), -2, Gravity.CENTER))
         setContentView(root)
     }

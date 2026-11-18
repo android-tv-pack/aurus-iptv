@@ -172,6 +172,8 @@ class Prefs(ctx: Context) {
 
     /** in the channel list the small window plays the channel under the focus (false: it stays on the channel that is watched) */
     var previewFocus: Boolean get() = flag("previewFocus", false); set(v) = put("previewFocus", v)
+    /** Settings > Interface > Text colour, an index of [Ui.TONES] */
+    var textTone: Int get() = str("textTone").toIntOrNull() ?: 0; set(v) = put("textTone", v.toString())
 
     /** when a newer version was last looked for, and which one was found ("" = none) */
     var updateChecked: Long get() = p.getLong("updateChecked", 0L); set(v) { p.edit().putLong("updateChecked", v).apply() }

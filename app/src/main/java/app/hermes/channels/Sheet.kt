@@ -47,7 +47,7 @@ class Sheet(private val ui: Ui, private val title: String, private val message: 
             setSelectAllOnFocus(true)
             imeOptions = EditorInfo.IME_ACTION_DONE
             setTextSize(TypedValue.COMPLEX_UNIT_PX, ui.u(14).toFloat())
-            setTextColor(Color.WHITE)
+            setTextColor(ui.fg)
             setHintTextColor(ui.white(90))
             setPadding(ui.u(14), ui.u(9), ui.u(14), ui.u(9))
         }
@@ -64,14 +64,14 @@ class Sheet(private val ui: Ui, private val title: String, private val message: 
             background = ui.rounded(Color.rgb(16, 21, 40), ui.u(18), ui.u(1), ui.white(34))
             setPadding(ui.u(22), ui.u(20), ui.u(22), ui.u(18))
         }
-        card.addView(ui.label(18f, Color.WHITE, lines = 2).apply { text = title })
+        card.addView(ui.label(18f, ui.fg, lines = 2).apply { text = title })
         message?.let {
             card.addView(ui.label(12f, ui.white(170), lines = 12).apply { text = it; setLineSpacing(ui.u(3).toFloat(), 1f) },
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.u(8) })
         }
         if (picture != 0) card.addView(android.widget.ImageView(a).apply {
             setImageResource(picture)
-            background = ui.rounded(Color.WHITE, ui.u(10))
+            background = ui.rounded(ui.fg, ui.u(10))
             clipToOutline = true
         }, LinearLayout.LayoutParams(ui.u(150), ui.u(150)).apply { topMargin = ui.u(14); gravity = Gravity.CENTER_HORIZONTAL })
         var first: View? = null
@@ -99,7 +99,7 @@ class Sheet(private val ui: Ui, private val title: String, private val message: 
                     setPadding(ui.u(15), ui.u(9.5f), ui.u(15), ui.u(10))
                     background = ui.rounded(ui.white(10), ui.u(11))
                 }
-                line.addView(ui.label(14f, Color.WHITE).apply { text = it.label }, LinearLayout.LayoutParams(0, -2, 1f))
+                line.addView(ui.label(14f, ui.fg).apply { text = it.label }, LinearLayout.LayoutParams(0, -2, 1f))
                 val value = ui.label(13f, ui.white(190)).apply { text = it.value?.invoke().orEmpty() }
                 line.addView(value, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = ui.u(12) })
                 line.setOnFocusChangeListener { v, has ->
@@ -119,7 +119,7 @@ class Sheet(private val ui: Ui, private val title: String, private val message: 
         if (buttons.isNotEmpty()) {
             val bar = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
             for (b in buttons) {
-                val t = ui.label(13f, Color.WHITE, true).apply {
+                val t = ui.label(13f, ui.fg, true).apply {
                     text = b.label
                     isFocusable = true
                     isClickable = true
