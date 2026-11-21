@@ -1015,6 +1015,14 @@ class MainActivity : Activity() {
         return if (i < 0) 0 else modes[i].modeId
     }
 
+    /** how many rates the screen offers at its present size (many projectors and some TVs offer one only) */
+    private fun screenRates(): Int {
+        @Suppress("DEPRECATION") val d = windowManager.defaultDisplay
+        val cur = d.mode
+        return d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+            .map { Math.round(it.refreshRate * 100) }.distinct().size
+    }
+
     /** switches the screen to the rate of the channel that plays (same resolution), so that motion is even */
     private fun matchScreen() {
         val lp = window.attributes
@@ -2956,7 +2964,12 @@ class MainActivity : Activity() {
                     if (other) Plus.otherDelay(prefs.soundDelay)
                 },
                 Page.Row("Refresh rate", "The TV is switched to the channel's rate, for even motion. It goes dark for a moment each time it switches",
-                    { if (!prefs.matchRate) "Off" else if (prefs.rateWait) "Auto, once you stay on a channel" else "Auto, at once" }) { d ->
+                    { if (screenRates() < 2) "One rate only" else if (!prefs.matchRate) "Off" else if (prefs.rateWait) "Auto, once you stay on a channel" else "Auto, at once" },
+                    // (a screen with one rate, as many projectors and some TVs: there is nothing to switch to)
+                    steps = screenRates() > 1,
+                    about = if (screenRates() < 2) "This screen offers one picture rate only (${screenLine()}), so there is nothing to switch to: " +
+                        "every channel is shown at that rate." else null) { d ->
+                    if (screenRates() < 2) return@Row
                     // Off, once you stay, at once
                     val now = if (!prefs.matchRate) 0 else if (prefs.rateWait) 1 else 2
                     val next = (now + (if (d < 0) 2 else 1)) % 3
