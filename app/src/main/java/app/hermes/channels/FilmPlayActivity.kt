@@ -14,7 +14,6 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.SurfaceView
 import android.view.View
-import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -36,6 +35,8 @@ class FilmPlayActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
     private lateinit var surface: SurfaceView
+    /** the screen stays on while the film plays */
+    private val screenOn = ScreenOn(this)
     private lateinit var bar: LinearLayout
     private lateinit var times: TextView
     private lateinit var state: TextView
@@ -69,7 +70,6 @@ class FilmPlayActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         ui = Ui(this); prefs = Prefs(this)
         titles = intent.getStringArrayExtra("titles") ?: emptyArray()
         addresses = intent.getStringArrayExtra("addresses") ?: emptyArray()
@@ -138,7 +138,7 @@ class FilmPlayActivity : Activity() {
                 if (st != Player.STATE_BUFFERING) main.removeCallbacks(waiting)
                 tick.run()
             }
-            override fun onIsPlayingChanged(on: Boolean) { tick.run() }
+            override fun onIsPlayingChanged(on: Boolean) { screenOn.playing(on); tick.run() }
             override fun onCues(c: androidx.media3.common.text.CueGroup) { cues.show(c.cues) }
             override fun onPlayerError(e: PlaybackException) {
                 Log.w(tag, "film: ${e.errorCodeName}")
