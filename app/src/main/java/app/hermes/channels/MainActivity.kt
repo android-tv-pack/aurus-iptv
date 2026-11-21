@@ -2238,7 +2238,8 @@ class MainActivity : Activity() {
         }
         nowCard.setOnKeyListener { _, k, ev ->
             when (k) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) chanList.requestFocus(); true }
+                // (beside a list with no channels, as Settings or an empty Favourites, Left goes back to the lists)
+                KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) { if (shown.isNotEmpty()) chanList.requestFocus() else revealLists() }; true }
                 KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> true
                 else -> false
             }
@@ -2264,6 +2265,8 @@ class MainActivity : Activity() {
             when (k) {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { if (ev.action == KeyEvent.ACTION_DOWN && shown.isNotEmpty()) putListsAway(); true }
                 KeyEvent.KEYCODE_DPAD_LEFT -> true
+                // (the lists end at Settings: Down there stays, it does not take the remote over to the programme card)
+                KeyEvent.KEYCODE_DPAD_DOWN -> groupList.selectedItemPosition >= groupList.count - 1
                 else -> false
             }
         }
@@ -2300,6 +2303,8 @@ class MainActivity : Activity() {
             when (k) {
                 KeyEvent.KEYCODE_DPAD_LEFT -> { if (ev.action == KeyEvent.ACTION_DOWN) revealLists(); true }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { if (ev.action == KeyEvent.ACTION_DOWN && detailsFor >= 0) nowCard.requestFocus(); true }
+                // (the last channel: Down stays on it, as on the lists)
+                KeyEvent.KEYCODE_DPAD_DOWN -> chanList.selectedItemPosition >= chanList.count - 1
                 else -> false
             }
         }
