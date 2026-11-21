@@ -88,6 +88,8 @@ class MainActivity : Activity() {
     private lateinit var ui: Ui
     private lateinit var root: FrameLayout
     private lateinit var surface: SurfaceView
+    /** the screen stays on while a channel plays */
+    private val screenOn = ScreenOn(this)
     private lateinit var cues: CueView
     /** black over the picture while a channel changes, for those who do not want the last picture to stay */
     private lateinit var shade: View
@@ -139,7 +141,6 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         ui = Ui(this)
         prefs = Prefs(this)
         compact = Plus.compact(prefs)
@@ -1182,6 +1183,7 @@ class MainActivity : Activity() {
                 p.stop()
                 if (!other) { other = true; p.clearVideoSurface() }
                 shade.visibility = View.VISIBLE
+                screenOn.playing(true)
                 Plus.play(address, surface)
                 return
             }
@@ -1422,6 +1424,8 @@ class MainActivity : Activity() {
             if (state == Player.STATE_BUFFERING && firstPicture && slowPieces >= 2) saySlow()
             if (state == Player.STATE_READY && !faded) { faded = true; fadeTo(1f, 220) }
         }
+        // (while the other engine plays, the app's own player stands still: the screen stays on for that one)
+        override fun onIsPlayingChanged(isPlaying: Boolean) { if (!other) screenOn.playing(isPlaying) }
         override fun onRenderedFirstFrame() {
             uncover()
             if (!sleepWarned) say("")
